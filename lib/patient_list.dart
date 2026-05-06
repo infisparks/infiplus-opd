@@ -19,6 +19,8 @@ class LeftPanelPatientList extends StatefulWidget {
   final Function(int) onPatientSelected;
   final Future<void> Function() onRefresh;
   final VoidCallback onLogout;
+  final VoidCallback onNewRegistration;
+  final Function(Patient) onEditPatient;
 
   const LeftPanelPatientList({
     super.key,
@@ -27,6 +29,8 @@ class LeftPanelPatientList extends StatefulWidget {
     required this.onPatientSelected,
     required this.onRefresh,
     required this.onLogout,
+    required this.onNewRegistration,
+    required this.onEditPatient,
   });
 
   @override
@@ -202,6 +206,22 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
           ),
           const SizedBox(width: 4),
           Tooltip(
+            message: "New Registration",
+            child: InkWell(
+              onTap: widget.onNewRegistration,
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.person_add_alt_1_rounded, color: AppColors.primary, size: 20),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Tooltip(
             message: "Logout",
             child: InkWell(
               onTap:        widget.onLogout,
@@ -216,6 +236,7 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
               ),
             ),
           ),
+
         ],
       ),
     );
@@ -374,6 +395,82 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
     }
   }
 
+  Future<void> _softDeletePatient(Patient p) async {
+    final bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Delete Registration", style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+        content: Text("Are you sure you want to delete ${p.name}'s registration? This action can be undone by admin.",
+          style: GoogleFonts.poppins(fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
+            child: const Text("Delete", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await SupabaseHandler.client.from('opd_registration').update({
+        'is_Deleted': true,
+        'deleted_at': DateTime.now().toIso8601String(),
+        'deleted_by': SupabaseHandler.client.auth.currentUser?.email ?? 'System',
+      }).eq('id', p.opdRegistrationId);
+
+      await widget.onRefresh();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Registration deleted successfully"), backgroundColor: AppColors.danger),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error deleting: $e"), backgroundColor: AppColors.danger),
+        );
+      }
+    }
+  }
+
+  void _showActionSheet(Patient p) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(p.name, style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: const Icon(Icons.edit_note_rounded, color: AppColors.primary),
+              title: const Text("Edit Registration Details"),
+              onTap: () {
+                Navigator.pop(context);
+                widget.onEditPatient(p);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline_rounded, color: AppColors.danger),
+              title: const Text("Delete Registration"),
+              onTap: () {
+                Navigator.pop(context);
+                _softDeletePatient(p);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _patientCard(Patient patient, int originalIndex, bool isSelected) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
@@ -439,6 +536,7 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
               borderRadius: BorderRadius.circular(14),
               child: InkWell(
                 onTap:        () => widget.onPatientSelected(originalIndex),
+                onLongPress:  () => _showActionSheet(patient),
                 borderRadius: BorderRadius.circular(14),
                 hoverColor:   AppColors.primary.withValues(alpha: 0.04),
                 child: Padding(

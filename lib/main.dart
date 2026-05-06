@@ -11,6 +11,7 @@ import 'package:infiplus_opd/patient_details.dart';
 import 'package:infiplus_opd/supabase_handler.dart';
 import 'package:infiplus_opd/services/master_data_service.dart';
 import 'package:infiplus_opd/services/server_data_service.dart' as sds;
+import 'package:infiplus_opd/registration_form.dart';
 
 // ─────────────────────────────────────────────────────────────────
 //  GLOBAL DESIGN SYSTEM
@@ -60,10 +61,11 @@ class Patient {
   final String? createdAt;
   final bool isFinalized;
   final String visitStatus;
+  final Map<String, dynamic> fullData; // Raw data for editing
 
   DateTime get visitDate {
     if (createdAt == null) return DateTime.now();
-    return DateTime.parse(createdAt!);
+    return DateTime.parse(createdAt!).toLocal();
   }
 
   Patient({
@@ -75,6 +77,7 @@ class Patient {
     required this.id,
     required this.address,
     required this.opdRegistrationId,
+    required this.fullData,
     this.visitType = '',
     this.doctorId = '',
     this.createdAt,
@@ -119,6 +122,7 @@ class Patient {
       createdAt: map['created_at'],
       isFinalized: map['is_finalized'] ?? false,
       visitStatus: map['visit_status']?.toString() ?? '',
+      fullData: map,
     );
   }
 }
@@ -130,8 +134,8 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SupabaseHandler.initialize();
   
-  // High-Performance Master Data Loading (Pre-loads Symptoms, Medicines, etc.)
-  await MasterDataService().initialize();
+  // Start loading master data in background, don't block the UI thread
+  MasterDataService().initialize(); 
   
   runApp(const MyApp());
 }
@@ -220,10 +224,68 @@ class MyApp extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
+
   @override
   Widget build(BuildContext context) {
-    final session = SupabaseHandler.client.auth.currentSession;
-    return session != null ? const PatientDashboardPage() : const LoginPage();
+    return ValueListenableBuilder<bool>(
+      valueListenable: MasterDataService().loadStatus,
+      builder: (context, isLoaded, _) {
+        if (!isLoaded) {
+          return const SplashScreen();
+        }
+
+        final session = SupabaseHandler.client.auth.currentSession;
+        return session != null ? const PatientDashboardPage() : const LoginPage();
+      },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  SPLASH SCREEN — Prevents black screen, shows progress
+// ─────────────────────────────────────────────────────────────────
+class SplashScreen extends StatelessWidget {
+  const SplashScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF1E3A8A), // Match login theme
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.security_rounded, size: 64, color: Colors.white),
+            ),
+            const SizedBox(height: 32),
+            Text("InfiPlus OPD",
+              style: GoogleFonts.poppins(
+                fontSize: 24, fontWeight: FontWeight.w700, color: Colors.white, letterSpacing: 1.2
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text("Powering your clinical workspace",
+              style: GoogleFonts.poppins(fontSize: 14, color: Colors.white.withOpacity(0.7)),
+            ),
+            const SizedBox(height: 48),
+            const SizedBox(
+              width: 40,
+              height: 40,
+              child: CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 3,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -457,6 +519,8 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
   int  _selectedIndex      = 0;
   bool _isOffline          = false;
   bool _isSyncing          = false;
+  bool _isRegistering      = false;
+  Patient? _editingPatient;
 
   late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
 
@@ -501,6 +565,7 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
       final response = await SupabaseHandler.client
           .from('opd_registration')
           .select('*, patient_detail!inner(*)')
+          .eq('is_Deleted', false)
           .order('created_at', ascending: false)
           .limit(50)
           .timeout(const Duration(seconds: 10));
@@ -620,54 +685,103 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
               child: Row(
                 children: [
                   // ── LEFT SIDEBAR ─────────────────────────────
-                  SizedBox(
-                    width: isTablet ? 380 : screenWidth,
-                    child: LeftPanelPatientList(
-                      patients:          patients,
-                      selectedIndex:     _selectedIndex,
-                      onPatientSelected: (index) async {
-                        setState(() => _selectedIndex = index);
-                        if (!isTablet) {
-                          // On mobile, navigate to details page
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => Scaffold(
-                                appBar: AppBar(
-                                  title: Text(patients[index].name, style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600)),
-                                  leading: IconButton(
-                                    icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
-                                    onPressed: () => Navigator.pop(context),
+                  if (isTablet || !_isRegistering)
+                    SizedBox(
+                      width: isTablet ? 380 : screenWidth,
+                      child: LeftPanelPatientList(
+                        patients:          patients,
+                        selectedIndex:     _selectedIndex,
+                        onPatientSelected: (index) async {
+                          setState(() {
+                            _selectedIndex = index;
+                            _isRegistering = false; // Close registration when patient selected
+                            _editingPatient = null;
+                          });
+                          if (!isTablet) {
+                            // On mobile, navigate to details page
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => Scaffold(
+                                  appBar: AppBar(
+                                    title: Text(patients[index].name, style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600)),
+                                    leading: IconButton(
+                                      icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
+                                      onPressed: () => Navigator.pop(context),
+                                    ),
+                                  ),
+                                  body: RightPanelPatientDetails(patient: patients[index]),
+                                ),
+                              ),
+                            );
+                            // Auto-refresh when returning from details
+                            _syncWithCloud();
+                          }
+                        },
+                        onRefresh:         _syncWithCloud,
+                        onLogout: () async {
+                          await SupabaseHandler.client.auth.signOut();
+                          if (!context.mounted) return;
+                          Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
+                        },
+                        onNewRegistration: () {
+                          setState(() {
+                            _isRegistering = true;
+                            _editingPatient = null;
+                          });
+                        },
+                        onEditPatient: (p) async {
+                          setState(() {
+                            _editingPatient = p;
+                            _isRegistering = true;
+                          });
+                          if (!isTablet) {
+                            // On mobile, show in a full screen modal/page
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => Scaffold(
+                                  body: RegistrationForm(
+                                    editPatient: p,
+                                    onCancel: () => Navigator.pop(context),
+                                    onSuccess: () => Navigator.pop(context),
                                   ),
                                 ),
-                                body: RightPanelPatientDetails(patient: patients[index]),
                               ),
-                            ),
-                          );
-                          // Auto-refresh when returning from details
-                          _syncWithCloud();
-                        }
-                      },
-                      onRefresh:         _syncWithCloud,
-                      onLogout: () async {
-                        await SupabaseHandler.client.auth.signOut();
-                        if (!context.mounted) return;
-                        Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
-                      },
+                            );
+                            _syncWithCloud();
+                          }
+                        },
+                      ),
                     ),
-                  ),
 
-                  // ── RIGHT DETAIL PANEL ───────────────────────
-                  if (isTablet)
+                  // ── RIGHT DETAIL PANEL / REGISTRATION FORM ───
+                  if (isTablet || _isRegistering)
                     Expanded(
                       child: Container(
                         color: AppColors.bgBody,
-                        child: RightPanelPatientDetails(patient: patients[_selectedIndex]),
+                        child: _isRegistering
+                            ? RegistrationForm(
+                                editPatient: _editingPatient,
+                                onCancel: () => setState(() {
+                                  _isRegistering = false;
+                                  _editingPatient = null;
+                                }),
+                                onSuccess: () {
+                                  setState(() {
+                                    _isRegistering = false;
+                                    _editingPatient = null;
+                                  });
+                                  _syncWithCloud();
+                                },
+                              )
+                            : RightPanelPatientDetails(patient: patients[_selectedIndex]),
                       ),
                     ),
                 ],
               ),
             ),
+
           ],
         ),
       ),

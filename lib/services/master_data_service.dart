@@ -35,36 +35,46 @@ class MasterDataService {
     try {
       debugPrint("📡 Syncing Master Data from Cloud...");
 
-      // 1. Fetch Master Drug List (Map Format)
-      final medResponse = await SupabaseHandler.client.from('opd_medicine').select('medicine_name, type, unit');
-      if (medResponse is List) {
-        medicines = medResponse.map((row) => {
-          'name': row['medicine_name']?.toString() ?? '',
-          'type': row['type']?.toString() ?? '', 
-          'unit': row['unit']?.toString() ?? '', 
-        }).toList();
-        debugPrint("✅ Medicines Synced: ${medicines.length}");
-      }
-
-      // 2. Fetch Datasets (Symptoms, Diagnoses, etc.)
-      final response = await SupabaseHandler.client.from('opd_datasets').select('dataname, datajson');
-      if (response is List) {
-        for (var row in response) {
-          final name = row['dataname']?.toString().trim().toLowerCase();
-          final rawJson = row['datajson'];
-          List<String> list = _parseJsonList(rawJson);
-
-          if (name == 'symptoms') symptoms = list;
-          else if (name == 'diagnosis') diagnoses = list;
-          else if (name == 'findings') findings = list;
-          else if (name == 'instructions') instructions = list;
-          else if (name == 'investigations') investigations = list;
-          else if (name == 'procedures') procedures = list;
-        }
-        debugPrint("✅ Dataset Sync Complete");
-      }
+      // Fetch both in parallel to reduce startup time
+      await Future.wait([
+        _syncMedicines(),
+        _syncDatasets(),
+      ]);
+      
+      debugPrint("✅ Master Data Sync Complete");
     } catch (e) {
       debugPrint("❌ MasterData Sync Error: $e");
+    }
+  }
+
+  Future<void> _syncMedicines() async {
+    final medResponse = await SupabaseHandler.client.from('opd_medicine').select('medicine_name, type, unit');
+    if (medResponse is List) {
+      medicines = medResponse.map((row) => {
+        'name': row['medicine_name']?.toString() ?? '',
+        'type': row['type']?.toString() ?? '', 
+        'unit': row['unit']?.toString() ?? '', 
+      }).toList();
+      debugPrint("✅ Medicines Synced: ${medicines.length}");
+    }
+  }
+
+  Future<void> _syncDatasets() async {
+    final response = await SupabaseHandler.client.from('opd_datasets').select('dataname, datajson');
+    if (response is List) {
+      for (var row in response) {
+        final name = row['dataname']?.toString().trim().toLowerCase();
+        final rawJson = row['datajson'];
+        List<String> list = _parseJsonList(rawJson);
+
+        if (name == 'symptoms') symptoms = list;
+        else if (name == 'diagnosis') diagnoses = list;
+        else if (name == 'findings') findings = list;
+        else if (name == 'instructions') instructions = list;
+        else if (name == 'investigations') investigations = list;
+        else if (name == 'procedures') procedures = list;
+      }
+      debugPrint("✅ Datasets Synced");
     }
   }
 

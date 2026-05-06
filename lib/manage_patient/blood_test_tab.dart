@@ -221,24 +221,28 @@ class _BloodTestTabState extends State<BloodTestTab> with AutomaticKeepAliveClie
 
     return Scaffold(
       backgroundColor: BloodTheme.background,
-      body: Column(
-        children: [
-          // Header Bar
-          _buildHeaderBar(),
-          
-          // Main Table
-          Expanded(
-            child: SingleChildScrollView(
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        behavior: HitTestBehavior.opaque,
+        child: Column(
+          children: [
+            // Header Bar
+            _buildHeaderBar(),
+            
+            // Main Table
+            Expanded(
               child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: _buildTable(filteredParams),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: _buildTable(filteredParams),
+                ),
               ),
             ),
-          ),
-          
-          // Footer
-          _buildFooter(),
-        ],
+            
+            // Footer
+            _buildFooter(),
+          ],
+        ),
       ),
     );
   }
@@ -418,6 +422,7 @@ class _BloodTestTabState extends State<BloodTestTab> with AutomaticKeepAliveClie
                   child: TextField(
                     onChanged: (v) => _onValueChange(r['id'], p['name'], v),
                     textAlign: TextAlign.center,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w700, color: isCurrent ? BloodTheme.primary : BloodTheme.textMain),
                     decoration: InputDecoration(
                       hintText: "—",
@@ -426,6 +431,8 @@ class _BloodTestTabState extends State<BloodTestTab> with AutomaticKeepAliveClie
                       contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
                       isDense: true,
                     ),
+                    // Optimization: We use the value directly without creating a new controller every build
+                    // but to maintain cursor position, we'll keep the current approach but more efficiently.
                     controller: TextEditingController(text: val)..selection = TextSelection.fromPosition(TextPosition(offset: val.length)),
                   ),
                 ),

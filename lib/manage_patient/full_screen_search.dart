@@ -38,19 +38,9 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
       if (!_recentlyAdded.contains(item)) {
         _recentlyAdded.insert(0, item);
       }
-      // Clear search query to easily add another item
       _searchController.clear();
       _searchQuery = "";
     });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("Added: $item"),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        margin: const EdgeInsets.all(16),
-      ),
-    );
   }
 
   @override
@@ -62,17 +52,45 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
           .toList();
     }
 
+    const Color primaryColor = Color(0xFF6366F1); // Indigo / Purple
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF2563EB), size: 24),
+          icon: const Icon(Icons.close_rounded, color: Colors.grey, size: 24),
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(widget.title, style: GoogleFonts.poppins(color: const Color(0xFF0F172A), fontWeight: FontWeight.w600, fontSize: 16)),
+        actions: [
+          if (_searchQuery.isEmpty && _recentlyAdded.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                FocusScope.of(context).unfocus();
+                Navigator.pop(context);
+              },
+              child: Text("DONE", style: GoogleFonts.poppins(color: primaryColor, fontWeight: FontWeight.w700, fontSize: 14)),
+            ),
+          const SizedBox(width: 8),
+        ],
       ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      floatingActionButton: (_recentlyAdded.isNotEmpty && _searchQuery.isEmpty)
+        ? FloatingActionButton.extended(
+            onPressed: () {
+              FocusScope.of(context).unfocus();
+              Navigator.pop(context);
+            },
+            backgroundColor: primaryColor,
+            elevation: 4,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            icon: const Icon(Icons.check_circle_outline_rounded, color: Colors.white),
+            label: Text("FINISH", 
+              style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white)),
+          )
+        : null,
       body: Column(
         children: [
           // Search Bar
@@ -119,9 +137,9 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2563EB).withValues(alpha: 0.05),
+                  color: primaryColor.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.2)),
+                  border: Border.all(color: primaryColor.withValues(alpha: 0.2)),
                 ),
                 child: Row(
                   children: [
@@ -136,7 +154,7 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
                       icon: const Icon(Icons.add_rounded, size: 16),
                       label: const Text("Add"),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF2563EB),
+                        backgroundColor: primaryColor,
                         foregroundColor: Colors.white,
                         elevation: 0,
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -165,11 +183,11 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
                 spacing: 8,
                 runSpacing: 8,
                 children: _recentlyAdded.map((item) => InputChip(
-                  label: Text(item, style: GoogleFonts.poppins(fontSize: 13, color: const Color(0xFF2563EB), fontWeight: FontWeight.w500)),
-                  backgroundColor: const Color(0xFF2563EB).withValues(alpha: 0.1),
+                  label: Text(item, style: GoogleFonts.poppins(fontSize: 13, color: primaryColor, fontWeight: FontWeight.w500)),
+                  backgroundColor: primaryColor.withValues(alpha: 0.1),
                   side: BorderSide.none,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  deleteIcon: const Icon(Icons.cancel, color: Color(0xFF2563EB), size: 20),
+                  deleteIcon: const Icon(Icons.cancel, color: primaryColor, size: 20),
                   onDeleted: () {
                     setState(() {
                       _recentlyAdded.remove(item);
@@ -199,6 +217,7 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
                     ),
                   )
                 : SingleChildScrollView(
+                    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                     padding: const EdgeInsets.all(16),
                     child: Wrap(
                       spacing: 8,
@@ -217,7 +236,7 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(Icons.add_circle_outline_rounded, color: Color(0xFF2563EB), size: 16),
+                                const Icon(Icons.add_circle_outline_rounded, color: primaryColor, size: 16),
                                 const SizedBox(width: 8),
                                 Text(item, style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500, color: const Color(0xFF0F172A))),
                               ],

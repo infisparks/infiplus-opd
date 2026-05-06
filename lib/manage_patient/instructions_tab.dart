@@ -96,6 +96,7 @@ class _InstructionsTabState extends State<InstructionsTab> with AutomaticKeepAli
   // ==========================================
   Future<void> _loadMasterData() async {
     final master = MasterDataService();
+    await master.loadUsageRanks(); // LOAD RANKS FIRST
     setState(() {
       _instructionsList = master.instructions;
       _investigationsList = master.investigations;
@@ -158,16 +159,18 @@ class _InstructionsTabState extends State<InstructionsTab> with AutomaticKeepAli
   // --- GETTERS ---
   List<String> get _currentList {
     List<String> source;
-    if (_selectedSubTab == 0) source = _instructionsList;
-    else if (_selectedSubTab == 1) source = _investigationsList;
-    else source = _proceduresList;
+    String type;
+    if (_selectedSubTab == 0) { source = _instructionsList; type = 'instruction'; }
+    else if (_selectedSubTab == 1) { source = _investigationsList; type = 'investigation'; }
+    else { source = _proceduresList; type = 'procedure'; }
 
     List<String> filtered = source;
     if (_searchQuery.isNotEmpty) {
       filtered = source.where((s) => s.toLowerCase().contains(_searchQuery.toLowerCase())).toList();
     }
     
-    // Sort selected items to the top
+    // 1. Sort selected items to the top
+    // 2. Sort by usage frequency (Most Used)
     final selectedSet = _currentSelectedSet;
     final sorted = List<String>.from(filtered);
     sorted.sort((a, b) {
@@ -175,7 +178,13 @@ class _InstructionsTabState extends State<InstructionsTab> with AutomaticKeepAli
       bool bSelected = selectedSet.contains(b);
       if (aSelected && !bSelected) return -1;
       if (!aSelected && bSelected) return 1;
-      return 0;
+      
+      // Secondary sort: Usage Rank
+      int countA = MasterDataService().getUsageCount(type, a);
+      int countB = MasterDataService().getUsageCount(type, b);
+      if (countA != countB) return countB.compareTo(countA);
+      
+      return a.compareTo(b); // Alphabetical fallback
     });
 
     return sorted;
@@ -191,7 +200,12 @@ class _InstructionsTabState extends State<InstructionsTab> with AutomaticKeepAli
     setState(() {
       final set = _currentSelectedSet;
       if (set.contains(item)) set.remove(item);
-      else set.add(item);
+      else {
+        set.add(item);
+        // TRACK USAGE (Moves to top next time)
+        final type = _selectedSubTab == 0 ? 'instruction' : (_selectedSubTab == 1 ? 'investigation' : 'procedure');
+        MasterDataService().trackUsage(type, item);
+      }
     });
     _autoSave();
   }
@@ -379,10 +393,13 @@ class _InstructionsTabState extends State<InstructionsTab> with AutomaticKeepAli
                       ? _investigationsList
                       : _proceduresList,
               onItemSelected: (selected) {
+                final type = _selectedSubTab == 0 ? 'instruction' : (_selectedSubTab == 1 ? 'investigation' : 'procedure');
+                MasterDataService().trackUsage(type, selected);
+
                 if (_selectedSubTab == 0) {
                   if (!_instructionsList.contains(selected)) {
                     _instructionsList.add(selected);
-                    MasterDataService().instructions = _instructionsList;
+                    MasterDataService().saveDataset('instructions', _instructionsList);
                   }
                   if (!_selectedInstructions.contains(selected)) {
                     _selectedInstructions.add(selected);
@@ -390,7 +407,7 @@ class _InstructionsTabState extends State<InstructionsTab> with AutomaticKeepAli
                 } else if (_selectedSubTab == 1) {
                   if (!_investigationsList.contains(selected)) {
                     _investigationsList.add(selected);
-                    MasterDataService().investigations = _investigationsList;
+                    MasterDataService().saveDataset('investigations', _investigationsList);
                   }
                   if (!_selectedInvestigations.contains(selected)) {
                     _selectedInvestigations.add(selected);
@@ -398,7 +415,7 @@ class _InstructionsTabState extends State<InstructionsTab> with AutomaticKeepAli
                 } else {
                   if (!_proceduresList.contains(selected)) {
                     _proceduresList.add(selected);
-                    MasterDataService().procedures = _proceduresList;
+                    MasterDataService().saveDataset('procedures', _proceduresList);
                   }
                   if (!_selectedProcedures.contains(selected)) {
                     _selectedProcedures.add(selected);
@@ -519,14 +536,17 @@ class _InstructionsTabState extends State<InstructionsTab> with AutomaticKeepAli
                 if (val.isNotEmpty) {
                   if (_selectedSubTab == 0) {
                     if (!_instructionsList.contains(val)) _instructionsList.add(val);
-                    MasterDataService().instructions = _instructionsList;
+                    MasterDataService().saveDataset('instructions', _instructionsList);
                   } else if (_selectedSubTab == 1) {
                     if (!_investigationsList.contains(val)) _investigationsList.add(val);
-                    MasterDataService().investigations = _investigationsList;
+                    MasterDataService().saveDataset('investigations', _investigationsList);
                   } else {
                     if (!_proceduresList.contains(val)) _proceduresList.add(val);
-                    MasterDataService().procedures = _proceduresList;
+                    MasterDataService().saveDataset('procedures', _proceduresList);
                   }
+                  
+                  final type = _selectedSubTab == 0 ? 'instruction' : (_selectedSubTab == 1 ? 'investigation' : 'procedure');
+                  MasterDataService().trackUsage(type, val);
                   
                   _toggleSelection(val);
                   setState(() {

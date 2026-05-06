@@ -84,14 +84,128 @@ class MasterDataService {
             return e.toString();
           }).toList();
         }
-        if (decoded is Map && decoded['data'] is List) {
-          return (decoded['data'] as List).map((e) {
-            if (e is Map) return (e['name'] ?? '').toString();
-            return e.toString();
-          }).toList();
-        }
       } catch (e) {}
     }
     return [];
+  }
+
+  /// Saves a dataset back to Supabase (opd_datasets table).
+  /// This ensures new symptoms, diagnoses, etc., are permanent.
+  Future<void> saveDataset(String dataname, List<String> data) async {
+    try {
+      final name = dataname.trim().toLowerCase();
+      // Update local memory cache first for instant UI response
+      if (name == 'symptoms') symptoms = data;
+      else if (name == 'diagnosis') diagnoses = data;
+      else if (name == 'findings') findings = data;
+      else if (name == 'instructions') instructions = data;
+      else if (name == 'investigations') investigations = data;
+      else if (name == 'procedures') procedures = data;
+
+      // Sync to Supabase using upsert
+      await SupabaseHandler.client.from('opd_datasets').upsert({
+        'dataname': dataname,
+        'datajson': data,
+        'updated_at': DateTime.now().toIso8601String(),
+      }, onConflict: 'dataname');
+
+      debugPrint("✅ MasterDataService: Dataset '$dataname' saved to Cloud.");
+    } catch (e) {
+      debugPrint("❌ MasterDataService: Save error for '$dataname': $e");
+    }
+  }
+
+  // --- 4. RANKING & USAGE LOGIC ---
+  Map<String, int> _usageRanks = {}; // Key: "type_name", Value: count
+
+  /// Loads usage rankings for instructions, investigations, etc.
+  Future<void> loadUsageRanks() async {
+    try {
+      final response = await SupabaseHandler.client
+          .from('opd_report_item_usage_rank')
+          .select('item_type, item_name, usage_count');
+      
+      if (response is List) {
+        _usageRanks.clear();
+        for (var row in response) {
+          final key = "${row['item_type']}_${row['item_name']}";
+          _usageRanks[key] = row['usage_count'] ?? 0;
+        }
+      }
+    } catch (e) {
+      debugPrint("❌ MasterDataService: Error loading ranks: $e");
+    }
+  }
+
+  /// Increments usage count for an item to move it to the top.
+  Future<void> trackUsage(String type, String name) async {
+    try {
+      // 1. Update local cache for instant sorting
+      final key = "${type}_$name";
+      _usageRanks[key] = (_usageRanks[key] ?? 0) + 1;
+
+      // 2. Update Cloud (using the RPC function we created)
+      await SupabaseHandler.client.rpc('increment_opd_item_usage', params: {
+        'p_item_type': type,
+        'p_item_name': name,
+      });
+    } catch (e) {
+      // Fallback if RPC is not installed: simple upsert (won't increment but updates last_used)
+      try {
+        await SupabaseHandler.client.from('opd_report_item_usage_rank').upsert({
+          'item_type': type,
+          'item_name': name,
+          'last_used_at': DateTime.now().toIso8601String(),
+        }, onConflict: 'item_type, item_name');
+      } catch (_) {}
+    }
+  }
+
+  /// Helper to get usage count for sorting
+  int getUsageCount(String type, String name) {
+    return _usageRanks["${type}_$name"] ?? 0;
+  }
+
+  /// Saves or Updates a medicine in the opd_medicine table.
+  /// This ensures that type (TAB/CAP) and unit (mg/ml) preferences are remembered.
+  Future<void> saveMedicine(String name, String type, String unit) async {
+    try {
+      final nameClean = name.trim();
+      if (nameClean.isEmpty) return;
+
+      // 1. Update local memory cache for instant session parity
+      final index = medicines.indexWhere((m) => m['name']?.toLowerCase() == nameClean.toLowerCase());
+      if (index != -1) {
+        medicines[index] = {'name': nameClean, 'type': type, 'unit': unit};
+      } else {
+        medicines.add({'name': nameClean, 'type': type, 'unit': unit});
+      }
+
+      // 2. Check Cloud for existing record by name
+      final existing = await SupabaseHandler.client
+          .from('opd_medicine')
+          .select('id')
+          .ilike('medicine_name', nameClean)
+          .maybeSingle();
+
+      if (existing != null) {
+        // Update existing medicine preference
+        await SupabaseHandler.client
+            .from('opd_medicine')
+            .update({'type': type, 'unit': unit})
+            .eq('id', existing['id']);
+        debugPrint("✅ MasterDataService: Medicine '$nameClean' preferences updated.");
+      } else {
+        // Insert as new master record
+        await SupabaseHandler.client.from('opd_medicine').insert({
+          'medicine_name': nameClean,
+          'type': type,
+          'unit': unit,
+        });
+        debugPrint("✅ MasterDataService: Medicine '$nameClean' created in master list.");
+      }
+    } catch (e) {
+      debugPrint("❌ MasterDataService: Save preference error: $e");
+    }
   }
 }

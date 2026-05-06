@@ -135,7 +135,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
 
   // Constants
   final List<String> _doseOptions = ["1/4", "1/2", "1", "1½", "2", "3"];
-  final List<String> _durationOptions = ["3d", "5d", "7d", "10d", "15d", "1m", "3m"];
+  final List<String> _durationOptions = ["3d", "5d", "7d", "10d", "15d", "1m", "2m", "3m"];
 
   @override
   void initState() {
@@ -314,6 +314,10 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
   // --- 3. STATE MANAGEMENT ---
   void _populatePrescription(dynamic data) {
     if (data == null) return;
+    
+    // Remember which medicine was being edited (by name)
+    String? selectedMedName = _selectedMedicine?.name;
+
     List<dynamic> listToProcess = [];
     if (data is String) {
       try { listToProcess = jsonDecode(data); } catch (e) { debugPrint("JSON Decode Error: $e"); }
@@ -324,6 +328,17 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
     try {
       setState(() {
         _currentPrescription = listToProcess.map((e) => PrescriptionEntry.fromJson(e)).toList();
+        
+        // Re-link selection to the new instance in the refreshed list
+        if (selectedMedName != null) {
+          try {
+            final match = _currentPrescription.firstWhere((m) => m.name == selectedMedName);
+            _selectMedicine(match); // Re-syncs controllers and selection
+          } catch (e) {
+            // If the previously selected medicine is gone, clear selection
+            _selectedMedicine = null;
+          }
+        }
       });
     } catch(e) {
       debugPrint("Error parsing prescription objects: $e");
@@ -341,12 +356,38 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
 
   void _addMedicine(String name, String type) {
     setState(() {
+      // Find extra data from master list if it exists
+      String finalType = type;
+      String finalUnit = "";
+      
+      final masterItem = _medicineMasterList.firstWhere(
+        (m) => m['name'] == name, 
+        orElse: () => {}
+      );
+      
+      if (masterItem.isNotEmpty) {
+        finalType = masterItem['type'] ?? type;
+        finalUnit = masterItem['unit'] ?? "";
+      }
+
       final newMed = PrescriptionEntry(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           name: name,
-          type: type,
-          unit: ''
+          type: finalType,
+          unit: finalUnit
       );
+
+      // Auto-set common dosages based on type if unit is empty
+      if (finalUnit.isEmpty) {
+        if (finalType == "SYRUP" || finalType == "SUSP" || finalType == "DROP") {
+          newMed.unit = "ml";
+          newMed.dosage = "10";
+        } else if (finalType == "TAB" || finalType == "CAP") {
+          newMed.unit = finalType.toLowerCase();
+          newMed.dosage = "1";
+        }
+      }
+
       _currentPrescription.add(newMed);
       _selectMedicine(newMed);
       _searchController.clear();
@@ -433,47 +474,6 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
     _autoSave();
   }
 
-  void _setFrequency(String freq) {
-    if (_selectedMedicine == null) return;
-    setState(() {
-      final t = _selectedMedicine!.timing;
-      // Reset all
-      t.beforeBreakfast = t.afterBreakfast = false;
-      t.beforeLunch = t.afterLunch = false;
-      t.beforeDinner = t.afterDinner = false;
-
-      switch (freq.toUpperCase()) {
-        case 'OD':
-          t.afterBreakfast = true;
-          break;
-        case 'BD':
-          t.afterBreakfast = true;
-          t.afterDinner = true;
-          break;
-        case 'TDS':
-          t.afterBreakfast = true;
-          t.afterLunch = true;
-          t.afterDinner = true;
-          break;
-        case 'QID':
-          t.afterBreakfast = true;
-          t.afterLunch = true;
-          t.afterDinner = true;
-          t.beforeDinner = true; // Often used for 4th dose
-          break;
-        case 'SOS':
-          // All false, doctor might add a note
-          _selectedMedicine!.note = "Take SOS (as needed)";
-          _noteController.text = _selectedMedicine!.note;
-          break;
-        case 'HS':
-          t.afterDinner = true;
-          break;
-      }
-    });
-    _autoSave();
-  }
-
   // --- 4. UI BUILDING ---
   @override
   Widget build(BuildContext context) {
@@ -483,32 +483,36 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
     return Scaffold(
       backgroundColor: TxTheme.background,
       resizeToAvoidBottomInset: true,
-      body: Row(
-        children: [
-          // LEFT PANEL (LIST / HISTORY)
-          Expanded(
-            flex: 4,
-            child: Container(
-              color: TxTheme.surface,
-              child: Column(
-                children: [
-                  const SizedBox(height: 16),
-                  _buildModernTabs(),
-                  const Divider(height: 1, color: TxTheme.border),
-                  Expanded(
-                    child: _leftTabIndex == 0 ? _buildMedicinesList() : _buildHistoryList(),
-                  ),
-                ],
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          children: [
+            // LEFT PANEL (LIST / HISTORY)
+            Expanded(
+              flex: 4,
+              child: Container(
+                color: TxTheme.surface,
+                child: Column(
+                  children: [
+                    const SizedBox(height: 16),
+                    _buildModernTabs(),
+                    const Divider(height: 1, color: TxTheme.border),
+                    Expanded(
+                      child: _leftTabIndex == 0 ? _buildMedicinesList() : _buildHistoryList(),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          Container(width: 1, color: TxTheme.border),
-          // RIGHT PANEL (EDITOR)
-          Expanded(
-            flex: 6,
-            child: _selectedMedicine != null ? _buildEditorCockpit() : _buildEmptyState(),
-          ),
-        ],
+            Container(width: 1, color: TxTheme.border),
+            // RIGHT PANEL (EDITOR)
+            Expanded(
+              flex: 6,
+              child: _selectedMedicine != null ? _buildEditorCockpit() : _buildEmptyState(),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -731,6 +735,8 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                     onItemSelected: (selected) {
                       if (!_medicineMasterList.any((m) => m['name'] == selected)) {
                         _medicineMasterList.add({'name': selected, 'type': 'TAB', 'unit': ''});
+                        // PERMANENT SAVE TO CLOUD
+                        MasterDataService().saveMedicine(selected, 'TAB', '');
                       }
                       _addMedicine(selected, "TAB");
                     },
@@ -798,6 +804,26 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                         Text("ACTIVE RX (${_currentPrescription.length})",
                           style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600, color: TxTheme.textMain, letterSpacing: 0.5)),
                         const Spacer(),
+                        InkWell(
+                          onTap: _showBulkDurationDialog,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: TxTheme.primary.withAlpha(15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: TxTheme.primary.withAlpha(30)),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.auto_fix_high_rounded, size: 14, color: TxTheme.primary),
+                                SizedBox(width: 4),
+                                Text("Set All Duration", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: TxTheme.primary)),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
                         Text("tap to edit", style: GoogleFonts.poppins(fontSize: 11, color: TxTheme.textSub.withOpacity(0.6))),
                       ],
                     ),
@@ -1041,41 +1067,67 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                     Row(
                       children: [
                         // Type
-                        _buildHeaderDropdown(
-                          value: ["TAB","CAP","SYRUP","INJ","SUSP","DROP","CREAM","OINT"].contains(med.type.toUpperCase()) ? med.type.toUpperCase() : null,
-                          items: ["TAB","CAP","SYRUP","INJ","SUSP","DROP","CREAM","OINT"],
-                          hint: "TYPE",
-                          bgColor: const Color(0xFFF1F5F9),
-                          textColor: TxTheme.textSub,
-                          onChanged: (v) { 
-                            if(v!=null) {
-                              setState(() {
-                                med.type=v;
-                                if (v == "SYRUP" || v == "SUSP" || v == "DROP") {
-                                  med.unit = "ml";
-                                  if (!["5", "10", "15", "20", "30", "40", "50", "60", "70"].contains(med.dosage)) {
-                                    med.dosage = "10";
-                                  }
-                                } else if (v == "TAB") {
-                                  med.unit = "tab";
-                                  if (!["1/4", "1/2", "1", "1½", "2", "3"].contains(med.dosage)) {
-                                    med.dosage = "1";
-                                  }
-                                } else if (v == "CAP") {
-                                  med.unit = "cap";
-                                  if (!["1/4", "1/2", "1", "1½", "2", "3"].contains(med.dosage)) {
-                                    med.dosage = "1";
-                                  }
-                                } else if (v == "INJ") {
-                                  med.unit = "inj";
-                                  if (!["1", "2", "3", "4", "5", "10"].contains(med.dosage)) {
-                                    med.dosage = "1";
-                                  }
-                                }
-                              });
-                            }
-                            _autoSave(); 
-                          },
+                        // Type Selector (Tab Format)
+                        Expanded(
+                          child: Container(
+                            height: 38,
+                            child: ListView(
+                              scrollDirection: Axis.horizontal,
+                              children: ["TAB","CAP","SYRUP","SUSP","DROP","INJ","CREAM","OINT"].map((type) {
+                                bool isSelected = med.type.toUpperCase() == type;
+                                return Padding(
+                                  padding: const EdgeInsets.only(right: 6),
+                                  child: InkWell(
+                                    onTap: () {
+                                      setState(() {
+                                        med.type = type;
+                                        // Auto-update units/dosages based on type
+                                        if (type == "SYRUP" || type == "SUSP" || type == "DROP") {
+                                          med.unit = "ml";
+                                          if (!["5", "10", "15", "20", "30", "40", "50", "60", "70"].contains(med.dosage)) {
+                                            med.dosage = "10";
+                                          }
+                                        } else if (type == "TAB") {
+                                          med.unit = "tab";
+                                          if (!["1/4", "1/2", "1", "1½", "2", "3"].contains(med.dosage)) {
+                                            med.dosage = "1";
+                                          }
+                                        } else if (type == "CAP") {
+                                          med.unit = "cap";
+                                          if (!["1/4", "1/2", "1", "1½", "2", "3"].contains(med.dosage)) {
+                                            med.dosage = "1";
+                                          }
+                                        } else if (type == "INJ") {
+                                          med.unit = "inj";
+                                          if (!["1", "2", "3", "4", "5", "10"].contains(med.dosage)) {
+                                            med.dosage = "1";
+                                          }
+                                        }
+                                      });
+                                      _autoSave();
+                                      // REMEMBER TYPE PREFERENCE
+                                      MasterDataService().saveMedicine(med.name, type, med.unit);
+                                    },
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                                      alignment: Alignment.center,
+                                      decoration: BoxDecoration(
+                                        color: isSelected ? TxTheme.primary : const Color(0xFFF1F5F9),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: isSelected ? TxTheme.primary : Colors.transparent),
+                                      ),
+                                      child: Text(type, style: GoogleFonts.poppins(
+                                        fontSize: 11, 
+                                        fontWeight: FontWeight.w700, 
+                                        color: isSelected ? Colors.white : TxTheme.textSub
+                                      )),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ),
                         ),
                         const SizedBox(width: 8),
                         // Unit
@@ -1085,7 +1137,14 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                           hint: "UNIT",
                           bgColor: TxTheme.primary.withAlpha(10),
                           textColor: TxTheme.primary,
-                          onChanged: (v) { if(v!=null) setState(()=>med.unit=v); _autoSave(); },
+                          onChanged: (v) { 
+                            if(v!=null) {
+                              setState(()=>med.unit=v); 
+                              _autoSave();
+                              // REMEMBER UNIT PREFERENCE
+                              MasterDataService().saveMedicine(med.name, med.type, v);
+                            }
+                          },
                         ),
                       ],
                     ),
@@ -1149,14 +1208,30 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                     borderRadius: BorderRadius.circular(27),
                     border: Border.all(color: !currentDoseOptions.contains(med.dosage) ? TxTheme.primary : TxTheme.border, width: 1.5)
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: TextField(
-                    controller: _customDosageController,
-                    textAlign: TextAlign.center,
-                    keyboardType: TextInputType.text,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: TxTheme.primary),
-                    decoration: const InputDecoration(border: InputBorder.none, hintText: "Custom", hintStyle: TextStyle(fontSize: 12)),
-                    onChanged: (v) { setState(() => med.dosage = v); _autoSave(); },
+                  alignment: Alignment.center,
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: !currentDoseOptions.contains(med.dosage) ? med.dosage : null,
+                      hint: const Text("Custom", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: TxTheme.primary)),
+                      icon: const SizedBox.shrink(),
+                      dropdownColor: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      menuMaxHeight: 300,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: TxTheme.primary),
+                      items: List.generate(100, (i) => (i + 1).toString()).map((v) => DropdownMenuItem(
+                        value: v, 
+                        child: Center(child: Text(v))
+                      )).toList(),
+                      onChanged: (v) {
+                        if (v != null) {
+                          setState(() {
+                            med.dosage = v;
+                            _customDosageController.text = v;
+                          });
+                          _autoSave();
+                        }
+                      },
+                    ),
                   ),
                 ),
               ],
@@ -1164,22 +1239,6 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
               const SizedBox(height: 32),
               _buildSectionTitle("TIMING & FREQUENCY", Icons.access_time),
               const SizedBox(height: 12),
-              // --- QUICK FREQUENCY BAR (FOR SPEED) ---
-              Container(
-                height: 44,
-                margin: const EdgeInsets.only(bottom: 16),
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  children: [
-                    _buildQuickFreqBtn("OD", "1-0-0"),
-                    _buildQuickFreqBtn("BD", "1-0-1"),
-                    _buildQuickFreqBtn("TDS", "1-1-1"),
-                    _buildQuickFreqBtn("QID", "1-1-1-1"),
-                    _buildQuickFreqBtn("HS", "Night"),
-                    _buildQuickFreqBtn("SOS", "Needed"),
-                  ],
-                ),
-              ),
               Row(
                 children: [
                   Expanded(child: _buildModernTimingBlock("Breakfast", Icons.wb_twilight_rounded,
@@ -1236,16 +1295,33 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                     child: Row(
                       children: [
                         Expanded(
-                          child: TextField(
-                            controller: _customDurationController,
-                            textAlign: TextAlign.center,
-                            keyboardType: TextInputType.number,
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                            decoration: const InputDecoration(border: InputBorder.none, isDense: true, hintText: "...", hintStyle: TextStyle(fontSize: 12)),
-                            onChanged: (v) { 
-                              setState(() => med.duration = "$v$_customDurationUnit"); 
-                              _autoSave(); 
-                            },
+                          child: Container(
+                            height: 40,
+                            alignment: Alignment.center,
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: _customDurationController.text.isNotEmpty ? _customDurationController.text : null,
+                                hint: const Text("...", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                icon: const SizedBox.shrink(),
+                                dropdownColor: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                menuMaxHeight: 300,
+                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: TxTheme.textMain),
+                                items: List.generate(60, (i) => (i + 1).toString()).map((v) => DropdownMenuItem(
+                                  value: v, 
+                                  child: Center(child: Text(v))
+                                )).toList(),
+                                onChanged: (v) {
+                                  if (v != null) {
+                                    setState(() {
+                                      _customDurationController.text = v;
+                                      med.duration = "$v$_customDurationUnit";
+                                    });
+                                    _autoSave();
+                                  }
+                                },
+                              ),
+                            ),
                           ),
                         ),
                         // Unit Selector (D/M/Y)
@@ -1272,7 +1348,43 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                 ],
               ),
               const SizedBox(height: 32),
-              _buildSectionTitle("INSTRUCTIONS / NOTES", Icons.sticky_note_2_outlined),
+              const SizedBox(height: 32),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _buildSectionTitle("INSTRUCTIONS / NOTES", Icons.sticky_note_2_outlined),
+                  // QUICK SHORTCUTS
+                  Container(
+                    height: 28,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      shrinkWrap: true,
+                      children: [
+                        _buildNoteShortcut("Once a week", med),
+                        _buildNoteShortcut("Once a day", med),
+                        _buildNoteShortcut("Once a month", med),
+                        _buildNoteShortcut("STAT dose", med),
+                        const SizedBox(width: 8),
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              _noteController.clear();
+                              med.note = "";
+                            });
+                            _autoSave();
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(color: Colors.red.withAlpha(20), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.red.withAlpha(40))),
+                            child: const Text("CLEAR", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.red)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 12),
               Container(
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: TxTheme.border)),
@@ -1370,6 +1482,178 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
             color: isActive ? Colors.white : TxTheme.textSub
         )),
       ),
+    );
+  }
+
+  Widget _buildNoteShortcut(String label, PrescriptionEntry med) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _noteController.text = label;
+            med.note = label;
+          });
+          _autoSave();
+        },
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: TxTheme.primary.withAlpha(10),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: TxTheme.primary.withAlpha(20)),
+          ),
+          child: Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: TxTheme.primary)),
+        ),
+      ),
+    );
+  }
+
+  // --- NEW: PROFESSIONAL SCROLL PICKER ---
+  void _showScrollPicker({
+    required String title,
+    required List<String> options,
+    required String initialValue,
+    required Function(String) onSelect,
+  }) {
+    int initialIndex = options.indexOf(initialValue);
+    if (initialIndex == -1) initialIndex = 0;
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) {
+        return Container(
+          height: 350,
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: const BoxDecoration(
+                  border: Border(bottom: BorderSide(color: TxTheme.border)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text("Select $title", style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 16)),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text("DONE", style: TextStyle(fontWeight: FontWeight.bold, color: TxTheme.primary)),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListWheelScrollView.useDelegate(
+                  itemExtent: 50,
+                  physics: const FixedExtentScrollPhysics(),
+                  onSelectedItemChanged: (index) => onSelect(options[index]),
+                  childDelegate: ListWheelChildBuilderDelegate(
+                    childCount: options.length,
+                    builder: (context, index) {
+                      return Center(
+                        child: Text(
+                          options[index],
+                          style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: TxTheme.textMain),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showBulkDurationDialog() {
+    String selectedNum = "5";
+    String selectedUnit = "d";
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Row(
+                children: [
+                  const Icon(Icons.auto_fix_high_rounded, color: TxTheme.primary),
+                  const SizedBox(width: 10),
+                  Text("Bulk Duration", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 18)),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text("Apply this duration to ALL selected medicines:", style: TextStyle(fontSize: 13, color: TxTheme.textSub)),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Number Dropdown
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(10)),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: selectedNum,
+                            items: List.generate(60, (i) => (i + 1).toString()).map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
+                            onChanged: (v) { if(v!=null) setDialogState(() => selectedNum = v); },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 15),
+                      // Unit Dropdown
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        decoration: BoxDecoration(color: TxTheme.primary.withAlpha(20), borderRadius: BorderRadius.circular(10)),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: selectedUnit,
+                            items: ['d', 'm', 'y'].map((u) => DropdownMenuItem(value: u, child: Text(u.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, color: TxTheme.primary)))).toList(),
+                            onChanged: (v) { if(v!=null) setDialogState(() => selectedUnit = v); },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL", style: TextStyle(color: TxTheme.textSub))),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      final newDur = "$selectedNum$selectedUnit";
+                      for (var med in _currentPrescription) {
+                        med.duration = newDur;
+                      }
+                      // Update UI controllers if a medicine is currently selected
+                      if (_selectedMedicine != null) {
+                        _customDurationController.text = selectedNum;
+                        _customDurationUnit = selectedUnit;
+                      }
+                    });
+                    _autoSave();
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text("Duration set to $selectedNum${selectedUnit.toUpperCase()} for all medicines"), behavior: SnackBarBehavior.floating),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: TxTheme.primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                  child: const Text("APPLY TO ALL"),
+                ),
+              ],
+            );
+          }
+        );
+      },
     );
   }
 }

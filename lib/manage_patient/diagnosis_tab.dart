@@ -302,65 +302,69 @@ class _DiagnosisTabState extends State<DiagnosisTab> with AutomaticKeepAliveClie
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
-      body: Row(
-        children: [
-          // Left Panel: Search & Master
-          Expanded(
-            flex: 4,
-            child: Container(
-              color: Colors.white,
-              child: Column(
-                children: [
-                  const SizedBox(height: 16),
-                  _buildCombinedHeaderTabs(),
-                  const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                  Expanded(
-                    child: _leftTabIndex == 0 ? _buildCurrentColumn(displayList) : _buildHistoryColumn(),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Vertical Divider
-          Container(width: 1, color: const Color(0xFFE2E8F0)),
-
-          // Right Panel: Structured Selection & Notes
-          Expanded(
-            flex: 6,
-            child: Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text("DIAGNOSIS & CLINICAL NOTES", 
-                        style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.textSecondary, letterSpacing: 1.2)),
-                      const Spacer(),
-                      if (_saving)
-                        Text("Saving...", style: GoogleFonts.poppins(fontSize: 10, color: AppColors.textMuted)),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  if (_selectedDiagnosis.isEmpty)
-                    _buildEmptySelectionState()
-                  else
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          children: [
+            // Left Panel: Search & Master
+            Expanded(
+              flex: 4,
+              child: Container(
+                color: Colors.white,
+                child: Column(
+                  children: [
+                    const SizedBox(height: 16),
+                    _buildCombinedHeaderTabs(),
+                    const Divider(height: 1, color: Color(0xFFE2E8F0)),
                     Expanded(
-                      child: ListView.separated(
-                        itemCount: _selectedDiagnosis.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 16),
-                        itemBuilder: (context, index) {
-                          final diag = _selectedDiagnosis[index];
-                          return _buildDiagnosisNoteCard(diag, index);
-                        },
-                      ),
+                      child: _leftTabIndex == 0 ? _buildCurrentColumn(displayList) : _buildHistoryColumn(),
                     ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+
+            // Vertical Divider
+            Container(width: 1, color: const Color(0xFFE2E8F0)),
+
+            // Right Panel: Structured Selection & Notes
+            Expanded(
+              flex: 6,
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text("DIAGNOSIS & CLINICAL NOTES", 
+                          style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.textSecondary, letterSpacing: 1.2)),
+                        const Spacer(),
+                        if (_saving)
+                          Text("Saving...", style: GoogleFonts.poppins(fontSize: 10, color: AppColors.textMuted)),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    if (_selectedDiagnosis.isEmpty)
+                      _buildEmptySelectionState()
+                    else
+                      Expanded(
+                        child: ListView.separated(
+                          itemCount: _selectedDiagnosis.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 16),
+                          itemBuilder: (context, index) {
+                            final diag = _selectedDiagnosis[index];
+                            return _buildDiagnosisNoteCard(diag, index);
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -380,7 +384,7 @@ class _DiagnosisTabState extends State<DiagnosisTab> with AutomaticKeepAliveClie
                 onItemSelected: (selected) {
                   if (!_masterDiagnosis.contains(selected)) {
                     _masterDiagnosis.add(selected);
-                    MasterDataService().diagnoses = _masterDiagnosis;
+                    MasterDataService().saveDataset('diagnosis', _masterDiagnosis);
                   }
                   if (!_selectedDiagnosis.any((e) => e['name'] == selected)) {
                     _selectedDiagnosis.add({'name': selected, 'note': ''});
@@ -632,10 +636,10 @@ class _DiagnosisTabState extends State<DiagnosisTab> with AutomaticKeepAliveClie
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      const Icon(Icons.auto_awesome, size: 14, color: Color(0xFF2563EB)),
+                      const Icon(Icons.auto_awesome, size: 14, color: AppColors.primary),
                       const SizedBox(width: 6),
                       Text("AI SUGGESTED", 
-                        style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.w800, color: const Color(0xFF2563EB), letterSpacing: 1.1)),
+                        style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.w800, color: AppColors.primary, letterSpacing: 1.1)),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -650,9 +654,9 @@ class _DiagnosisTabState extends State<DiagnosisTab> with AutomaticKeepAliveClie
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                           decoration: BoxDecoration(
-                            color: isSelected ? const Color(0xFF2563EB) : const Color(0xFFF1F5F9),
+                            color: isSelected ? AppColors.primary : const Color(0xFFF1F5F9),
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: isSelected ? const Color(0xFF2563EB) : const Color(0xFFE2E8F0)),
+                            border: Border.all(color: isSelected ? AppColors.primary : const Color(0xFFE2E8F0)),
                           ),
                           child: Text(name, 
                             style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600, color: isSelected ? Colors.white : const Color(0xFF1E293B))),

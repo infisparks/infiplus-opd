@@ -26,14 +26,14 @@ class PreviewTab extends StatefulWidget {
   const PreviewTab({
     super.key,
     required this.patient,
-    required this.opdId
+    required this.opdId,
   });
 
   @override
-  State<PreviewTab> createState() => _PreviewTabState();
+  State<PreviewTab> createState() => PreviewTabState();
 }
 
-class _PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMixin {
+class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
 
@@ -686,7 +686,7 @@ class _PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMi
   }
 
   // --- 3. SUBMIT TO SUPABASE ---
-  Future<void> _submitDataToSupabase() async {
+  Future<void> submitDataToSupabase() async {
     setState(() => _isSubmitting = true);
     final opdId = widget.opdId;
     final finalClinicalNote = _clinicalNoteController.text;
@@ -866,7 +866,7 @@ class _PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMi
                         width: double.infinity,
                         height: 48,
                         child: ElevatedButton.icon(
-                          onPressed: (_isSubmitting || _isSharing) ? null : _submitDataToSupabase,
+                          onPressed: (_isSubmitting || _isSharing) ? null : submitDataToSupabase,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: (_cloudData['is_finalized'] == true) ? Colors.orange[700] : PreviewTheme.primary, 
                             foregroundColor: Colors.white, 

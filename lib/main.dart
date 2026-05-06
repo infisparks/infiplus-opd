@@ -17,9 +17,9 @@ import 'package:infiplus_opd/services/server_data_service.dart' as sds;
 // ─────────────────────────────────────────────────────────────────
 class AppColors {
   // Brand
-  static const Color primary       = Color(0xFF2563EB); // Blue-600
-  static const Color primaryDark   = Color(0xFF1D4ED8); // Blue-700
-  static const Color accent        = Color(0xFF6366F1); // Indigo-500
+  static const Color primary       = Color(0xFF6366F1); // Indigo-500
+  static const Color primaryDark   = Color(0xFF4F46E5); // Indigo-600
+  static const Color accent        = Color(0xFF818CF8); // Indigo-400
   static const Color accentLight   = Color(0xFFEEF2FF); // Indigo-50
 
   // Surfaces

@@ -24,9 +24,13 @@ class _VitalsTabState extends State<VitalsTab> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: PatientVitalsTrend(patientUhid: widget.patient.id, currentOpdId: widget.opdId),
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        behavior: HitTestBehavior.opaque,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: PatientVitalsTrend(patientUhid: widget.patient.id, currentOpdId: widget.opdId),
+        ),
       ),
     );
   }

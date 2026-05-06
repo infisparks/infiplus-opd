@@ -33,6 +33,7 @@ class _NewConsultPageState extends State<NewConsultPage> {
   // Tab order: 0 History | 1 Test | 2 Vitals | 3 Symptoms | 4 Diagnosis | 5 Rx | 6 Report | 7 Print
   int _currentTabIndex = 5; // Default to Rx
   late PageController _pageController;
+  final GlobalKey<PreviewTabState> _previewKey = GlobalKey<PreviewTabState>();
 
   @override
   void initState() {
@@ -52,6 +53,13 @@ class _NewConsultPageState extends State<NewConsultPage> {
   }
 
   void _onTabTapped(int index) {
+    // DOUBLE CLICK PRINT TAB LOGIC:
+    // If user is already on Print Tab (7) and clicks it again, finalize and share.
+    if (index == 7 && _currentTabIndex == 7) {
+      _previewKey.currentState?.submitDataToSupabase();
+      return;
+    }
+
     setState(() => _currentTabIndex = index);
     _pageController.jumpToPage(index);
 
@@ -139,7 +147,7 @@ class _NewConsultPageState extends State<NewConsultPage> {
           DiagnosisTab(patient: widget.patient, opdId: widget.opdId),       // 4
           TreatmentTab(patient: widget.patient, opdId: widget.opdId),       // 5
           InstructionsTab(patient: widget.patient, opdId: widget.opdId),    // 6
-          PreviewTab(patient: widget.patient, opdId: widget.opdId),         // 7
+          PreviewTab(patient: widget.patient, opdId: widget.opdId, key: _previewKey),         // 7
         ],
       ),
 

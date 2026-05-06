@@ -7,6 +7,7 @@ import 'main.dart';
 import 'package:infiplus_opd/services/server_data_service.dart';
 import 'manage_patient/new_consult_page.dart';
 import 'package:intl/intl.dart';
+import 'manage_patient/medical_certificate_page.dart';
 
 // ─────────────────────────────────────────────────────────────────
 //  PATIENT DETAILS PANEL
@@ -338,7 +339,14 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
             },
           ),
           const SizedBox(width: 12),
-          _outlineBtn("Medical Certificate", Icons.description_outlined, () {}),
+          _outlineBtn("Medical Certificate", Icons.description_outlined, () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => MedicalCertificatePage(patient: widget.patient),
+              ),
+            );
+          }),
           const Spacer(),
           _refreshBtn(),
         ],
@@ -751,6 +759,118 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
           fontSize: 11,
           fontWeight: bold ? FontWeight.w600 : FontWeight.w400,
           color: AppColors.textPrimary,
+        ),
+      ),
+    );
+  }
+
+  // ── Medical Certificate Dialog ──────────────────────────────
+  void _showMedicalCertificateDialog() {
+    String selectedTemplate = "Sick Leave Certificate";
+    TextEditingController certificateController = TextEditingController();
+    
+    void updateContent(String templateName) {
+      String content = "";
+      final now = DateTime.now();
+      final dateStr = DateFormat('dd MMM yyyy').format(now);
+      
+      if (templateName == "Sick Leave Certificate") {
+        content = "To whom it may concern,\n\nThis is to certify that ${widget.patient.name}, aged ${widget.patient.ageInfo}, was under my clinical care from $dateStr to ${DateFormat('dd MMM yyyy').format(now.add(const Duration(days: 3)))}.\n\nHe/She is suffering from acute illness and is advised rest for 3 days. He/She is fit to resume duties on ${DateFormat('dd MMM yyyy').format(now.add(const Duration(days: 4)))}.";
+      } else if (templateName == "Fitness Certificate") {
+        content = "To whom it may concern,\n\nI have examined ${widget.patient.name} today ($dateStr) and found him/her to be in good health and physically fit. There are no signs of any communicable diseases or physical disabilities that would prevent him/her from performing routine activities.";
+      } else {
+        content = "This is to certify that ${widget.patient.name} has undergone a medical procedure today ($dateStr). Due to the nature of the procedure, he/she is advised to avoid strenuous activity and rest for the next 2 days.";
+      }
+      certificateController.text = content;
+    }
+
+    updateContent(selectedTemplate);
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              const Icon(Icons.verified_user_rounded, color: AppColors.primary),
+              const SizedBox(width: 12),
+              Text("Medical Certificate", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          content: SizedBox(
+            width: 600,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("SELECT TEMPLATE", style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey, letterSpacing: 1)),
+                const SizedBox(height: 8),
+                Row(
+                  children: ["Sick Leave Certificate", "Fitness Certificate", "Procedure Leave"].map((t) {
+                    bool isSel = selectedTemplate == t;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(t, style: TextStyle(fontSize: 11, fontWeight: isSel ? FontWeight.bold : FontWeight.normal)),
+                        selected: isSel,
+                        onSelected: (val) {
+                          if (val) {
+                            setDialogState(() => selectedTemplate = t);
+                            updateContent(t);
+                          }
+                        },
+                        selectedColor: AppColors.primary.withOpacity(0.2),
+                        labelStyle: TextStyle(color: isSel ? AppColors.primary : Colors.black87),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 20),
+                Text("EDIT CERTIFICATE CONTENT", style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey, letterSpacing: 1)),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: TextField(
+                    controller: certificateController,
+                    maxLines: 10,
+                    style: GoogleFonts.poppins(fontSize: 14, height: 1.6, color: Colors.black87),
+                    decoration: const InputDecoration(border: InputBorder.none),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
+            ElevatedButton.icon(
+              onPressed: () async {
+                try {
+                  await Supabase.instance.client.from('opd_medical_certificates').insert({
+                    'patient_id': widget.patient.id,
+                    'certificate_type': selectedTemplate,
+                    'final_content': certificateController.text,
+                  });
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Certificate Saved & Issued Successfully!")));
+                } catch (e) {
+                  debugPrint("Error saving certificate: $e");
+                }
+              },
+              icon: const Icon(Icons.print_rounded, size: 16),
+              label: const Text("ISSUE & PRINT"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
         ),
       ),
     );

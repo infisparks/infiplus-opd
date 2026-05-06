@@ -391,41 +391,45 @@ class _SymptomsTabState extends State<SymptomsTab> with AutomaticKeepAliveClient
 
     return Scaffold(
       backgroundColor: AppColors.bgBody,
-      body: Row(
-        children: [
-          // --- LEFT PANEL (List) ---
-          Expanded(
-            flex: 4,
-            child: Container(
-              color: AppColors.surface, // Clean white column
-              child: Column(
-                children: [
-                  const SizedBox(height: 16),
-                  _buildCombinedHeaderTabs(),
-                  const Divider(height: 1, color: AppColors.border),
-                  Expanded(
-                    child: _leftTabIndex == 0 
-                      ? _buildCurrentSymptomsColumn() 
-                      : _buildHistoryColumn(),
-                  ),
-                ],
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          children: [
+            // --- LEFT PANEL (List) ---
+            Expanded(
+              flex: 4,
+              child: Container(
+                color: AppColors.surface, // Clean white column
+                child: Column(
+                  children: [
+                    const SizedBox(height: 16),
+                    _buildCombinedHeaderTabs(),
+                    const Divider(height: 1, color: AppColors.border),
+                    Expanded(
+                      child: _leftTabIndex == 0 
+                        ? _buildCurrentSymptomsColumn() 
+                        : _buildHistoryColumn(),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          // Vertical Divider
-          Container(width: 1, color: AppColors.border),
+            // Vertical Divider
+            Container(width: 1, color: AppColors.border),
 
-          // --- RIGHT PANEL (Details) ---
-          Expanded(
-            flex: 6, // Slightly wider for better editing experience
-            child: Container(
-              color: const Color(0xFFFAFAFA), // Very subtle gray for contrast against white inputs
-              child: _selectedSymptomForDetail != null
-                  ? _buildDetailPanel()
-                  : _buildEmptyState(),
+            // --- RIGHT PANEL (Details) ---
+            Expanded(
+              flex: 6, // Slightly wider for better editing experience
+              child: Container(
+                color: const Color(0xFFFAFAFA), // Very subtle gray for contrast against white inputs
+                child: _selectedSymptomForDetail != null
+                    ? _buildDetailPanel()
+                    : _buildEmptyState(),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -480,6 +484,7 @@ class _SymptomsTabState extends State<SymptomsTab> with AutomaticKeepAliveClient
     return Container(
       child: InkWell(
         onTap: () => setState(() => _switchToDetailView(detail.name)),
+        onLongPress: () => _showDeleteConfirmation(detail.name, false),
         borderRadius: BorderRadius.circular(12),
         child: Container(
           padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
@@ -523,6 +528,7 @@ class _SymptomsTabState extends State<SymptomsTab> with AutomaticKeepAliveClient
     bool isSym = _isSymptom(label);
     return InkWell(
       onTap: () => _selectSymptom(label),
+      onLongPress: () => _showDeleteConfirmation(label, true),
       borderRadius: BorderRadius.circular(8),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -532,6 +538,37 @@ class _SymptomsTabState extends State<SymptomsTab> with AutomaticKeepAliveClient
             border: Border.all(color: Colors.grey[200]!),
             ),
         child: Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: isSym ? AppColors.textPrimary : AppColors.textSecondary)),
+      ),
+    );
+  }
+
+  void _showDeleteConfirmation(String name, bool fromMaster) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(fromMaster ? "Remove from List?" : "Remove Symptom?"),
+        content: Text(fromMaster 
+          ? "Do you want to hide '$name' from the suggestion list?" 
+          : "Do you want to remove '$name' from this prescription?"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
+          TextButton(
+            onPressed: () {
+              if (fromMaster) {
+                setState(() {
+                  _rawSymptoms.remove(name);
+                  _rawFindings.remove(name);
+                  MasterDataService().symptoms = _rawSymptoms;
+                  MasterDataService().findings = _rawFindings;
+                });
+              } else {
+                _removeSymptom(name);
+              }
+              Navigator.pop(context);
+            },
+            child: const Text("DELETE", style: TextStyle(color: Colors.red)),
+          ),
+        ],
       ),
     );
   }
@@ -979,13 +1016,18 @@ class _SymptomsTabState extends State<SymptomsTab> with AutomaticKeepAliveClient
         const SizedBox(height: 8),
         _buildModernTabs(),
         const SizedBox(height: 8),
-        // Active Selection Mini-Basket
+        // Active Selection Mini-Basket (Filtered by Tab)
         if (_selectedSymptomDetails.isNotEmpty) ...[
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Wrap(
               spacing: 8, runSpacing: 8,
-              children: _selectedSymptomDetails.values.map((detail) => _buildSelectedChip(detail)).toList(),
+              children: _selectedSymptomDetails.values.where((detail) {
+                bool isSym = _isSymptom(detail.name);
+                if (_selectedTabIndex == 0) return isSym;
+                if (_selectedTabIndex == 1) return !isSym;
+                return true; // All
+              }).map((detail) => _buildSelectedChip(detail)).toList(),
             ),
           ),
           const SizedBox(height: 12),
@@ -1014,15 +1056,16 @@ class _SymptomsTabState extends State<SymptomsTab> with AutomaticKeepAliveClient
                           onPressed: () {
                             final val = _symptomSearchQuery.trim();
                             if (val.isNotEmpty) {
+                              // If on Findings tab, add to findings. Otherwise, add to symptoms.
                               if (_selectedTabIndex == 1) {
                                 if (!_rawFindings.contains(val)) {
                                   _rawFindings.add(val);
-                                  MasterDataService().findings = _rawFindings;
+                                  MasterDataService().saveDataset('findings', _rawFindings);
                                 }
                               } else {
                                 if (!_rawSymptoms.contains(val)) {
                                   _rawSymptoms.add(val);
-                                  MasterDataService().symptoms = _rawSymptoms;
+                                  MasterDataService().saveDataset('symptoms', _rawSymptoms);
                                 }
                               }
                               _selectSymptom(val);
@@ -1094,36 +1137,10 @@ class _SymptomsTabState extends State<SymptomsTab> with AutomaticKeepAliveClient
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text("• $name", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                                if (isMap) ...[
-                                  _buildHistoryDetailText(s),
-                                ]
-                              ],
-                            ),
-                          ),
-                          InkWell(
-                            onTap: () {
-                              if (isMap) {
-                                final detail = SymptomDetail.fromJson(Map<String, dynamic>.from(s));
-                                if (!_selectedSymptomDetails.containsKey(detail.name)) {
-                                  setState(() {
-                                    _selectedSymptomDetails[detail.name] = detail;
-                                    _leftTabIndex = 0;
-                                    _switchToDetailView(detail.name);
-                                  });
-                                }
-                              } else {
-                                _selectSymptom(name);
-                              }
-                            },
-                            child: const Icon(Icons.add_circle_outline, size: 16, color: AppColors.primary),
-                          ),
+                          const Icon(Icons.check_circle_outline, size: 12, color: AppColors.textSecondary),
+                          const SizedBox(width: 8),
+                          Text(name, style: const TextStyle(fontSize: 12, color: AppColors.textPrimary)),
                         ],
                       ),
                     );
@@ -1168,23 +1185,33 @@ class _SymptomsTabState extends State<SymptomsTab> with AutomaticKeepAliveClient
       padding: const EdgeInsets.symmetric(horizontal: 16.0),
       child: InkWell(
         onTap: () {
+          String title = "Search Symptoms";
+          if (_selectedTabIndex == 1) title = "Search Findings";
+          if (_selectedTabIndex == 2) title = "Search Symptoms & Findings";
+
+          List<String> items = _rawSymptoms;
+          if (_selectedTabIndex == 1) items = _rawFindings;
+          if (_selectedTabIndex == 2) items = [..._rawSymptoms, ..._rawFindings];
+
           Navigator.push(
             context,
             MaterialPageRoute(
               builder: (ctx) => FullScreenSearchPage(
-                title: _selectedTabIndex == 1 ? "Search Findings" : "Search Symptoms",
-                hintText: _selectedTabIndex == 1 ? "Type finding name..." : "Type symptom name...",
-                allItems: _selectedTabIndex == 1 ? _rawFindings : _rawSymptoms,
+                title: title,
+                hintText: "Type to search...",
+                allItems: items,
                 onItemSelected: (selected) {
+                  // Logic to add to the correct list if it's a new item
                   if (_selectedTabIndex == 1) {
                     if (!_rawFindings.contains(selected)) {
                       _rawFindings.add(selected);
-                      MasterDataService().findings = _rawFindings;
+                      MasterDataService().saveDataset('findings', _rawFindings);
                     }
                   } else {
-                    if (!_rawSymptoms.contains(selected)) {
+                    // Default to symptoms if in tab 0 or 2
+                    if (!_rawSymptoms.contains(selected) && !_rawFindings.contains(selected)) {
                       _rawSymptoms.add(selected);
-                      MasterDataService().symptoms = _rawSymptoms;
+                      MasterDataService().saveDataset('symptoms', _rawSymptoms);
                     }
                   }
                   _selectSymptom(selected);

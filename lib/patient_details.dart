@@ -8,6 +8,7 @@ import 'package:infiplus_opd/services/server_data_service.dart';
 import 'manage_patient/new_consult_page.dart';
 import 'package:intl/intl.dart';
 import 'manage_patient/medical_certificate_page.dart';
+import 'package:infiplus_opd/manage_patient/canvas_management_page.dart';
 
 // ─────────────────────────────────────────────────────────────────
 //  PATIENT DETAILS PANEL
@@ -344,6 +345,19 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
               context,
               MaterialPageRoute(
                 builder: (_) => MedicalCertificatePage(patient: widget.patient),
+              ),
+            );
+          }),
+          const SizedBox(width: 12),
+          _outlineBtn("Canvas", Icons.brush_outlined, () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => CanvasManagementPage(
+                  uhid: widget.patient.id,
+                  opdId: widget.patient.opdRegistrationId,
+                  patientName: widget.patient.name,
+                ),
               ),
             );
           }),

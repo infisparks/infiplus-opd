@@ -1,17 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../main.dart'; // Patient Model + AppColors
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'vitals_tab.dart';
-import 'symptoms_tab.dart' hide AppColors;
+import 'symptoms_tab.dart';
 import 'treatment_tab.dart';
 import 'instructions_tab.dart';
 import 'preview_tab.dart';
-import 'medical_history_tab.dart' hide AppColors;
+import 'patient_documents_page.dart';
 import 'diagnosis_tab.dart';
 import 'blood_test_tab.dart';
 import 'history_tab.dart';
-import '../patient_vitals_trend.dart';
 import 'notes_dialog.dart';
 import '../services/server_data_service.dart';
 
@@ -122,6 +124,24 @@ class _NewConsultPageState extends State<NewConsultPage> {
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
             tooltip: "Clinical Notes",
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => PatientDocumentsPage(
+                    uhid: widget.patient.id,
+                    opdId: widget.opdId,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.folder_shared, size: 18),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            tooltip: "Patient Documents",
           ),
           const SizedBox(width: 8),
           IconButton(

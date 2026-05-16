@@ -17,10 +17,10 @@ class LeftPanelPatientList extends StatefulWidget {
   final List<Patient> patients;
   final int selectedIndex;
   final Function(int) onPatientSelected;
-  final Future<void> Function() onRefresh;
-  final VoidCallback onLogout;
+  final Future<void> Function({String? searchQuery}) onRefresh;
   final VoidCallback onNewRegistration;
   final Function(Patient) onEditPatient;
+  final Function(Patient) onAddPayment;
 
   const LeftPanelPatientList({
     super.key,
@@ -28,9 +28,9 @@ class LeftPanelPatientList extends StatefulWidget {
     required this.selectedIndex,
     required this.onPatientSelected,
     required this.onRefresh,
-    required this.onLogout,
     required this.onNewRegistration,
     required this.onEditPatient,
+    required this.onAddPayment,
   });
 
   @override
@@ -43,6 +43,7 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
 
   List<Patient> _visiblePatients    = [];
   DateFilter    _currentFilter      = DateFilter.today;
+  String        _selectedHospital   = "All Hospitals";
   bool          _hasSearchedAllMode = false;
   bool          _isRefreshing       = false;
 
@@ -77,14 +78,24 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
     List<Patient> result = [];
 
     if (_currentFilter == DateFilter.all) {
-      result = query.length < 4
+      // Lowered limit to 2 characters to be more flexible
+      result = query.length < 2
           ? []
-          : widget.patients.where((p) =>
-              p.name.toLowerCase().contains(query) ||
-              p.phone.contains(query) ||
-              p.id.toLowerCase().contains(query)).toList();
+          : widget.patients.where((p) {
+              final matchesHospital = _selectedHospital == "All Hospitals" || p.hospitalName == _selectedHospital;
+              if (!matchesHospital) return false;
+              
+              final matchesName  = p.name.toLowerCase().contains(query);
+              final matchesPhone = p.phone.contains(query);
+              final matchesId    = p.id.toLowerCase().contains(query);
+              
+              return matchesName || matchesPhone || matchesId;
+            }).toList();
     } else {
       result = widget.patients.where((p) {
+        final matchesHospital = _selectedHospital == "All Hospitals" || p.hospitalName == _selectedHospital;
+        if (!matchesHospital) return false;
+
         final pDay = DateTime(p.visitDate.year, p.visitDate.month, p.visitDate.day);
         final dateOk = _currentFilter == DateFilter.today
             ? pDay.isAtSameMomentAs(today)
@@ -123,13 +134,21 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
     if (newFilter != DateFilter.all) _applyFilters();
   }
 
-  void _onSearchTriggered() {
-    if (_currentFilter == DateFilter.all && _searchController.text.trim().length < 4) {
+  void _onSearchTriggered() async {
+    final query = _searchController.text.trim();
+    if (_currentFilter == DateFilter.all && query.length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Enter at least 4 characters to search.")),
+        const SnackBar(content: Text("Enter at least 2 characters to search.")),
       );
       return;
     }
+    
+    if (_currentFilter == DateFilter.all) {
+      setState(() => _isRefreshing = true);
+      await widget.onRefresh(searchQuery: query);
+      if (mounted) setState(() => _isRefreshing = false);
+    }
+    
     setState(() => _hasSearchedAllMode = true);
     _applyFilters();
   }
@@ -141,6 +160,9 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
       color: AppColors.surface,
       child: Column(
         children: [
+          // ── Hospital Filter ──────────────────────────────────
+          _buildHospitalFilter(),
+
           // ── Filter Tabs ──────────────────────────────────────
           _buildFilterTabs(),
 
@@ -152,6 +174,46 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
             child: Container(
               color: const Color(0xFFF8FAFF),
               child: _buildListContent(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Hospital Filter ──────────────────────────────────────────
+  Widget _buildHospitalFilter() {
+    final hospitals = widget.patients.map((p) => p.hospitalName).where((h) => h.isNotEmpty).toSet().toList();
+    hospitals.sort();
+    
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.local_hospital_rounded, size: 14, color: AppColors.textMuted),
+          const SizedBox(width: 8),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _selectedHospital,
+                isExpanded: true, // Takes full width for better tap target
+                icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 16),
+                style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.primary),
+                items: [
+                  const DropdownMenuItem(value: "All Hospitals", child: Text("All Hospitals")),
+                  ...hospitals.map((h) => DropdownMenuItem(value: h, child: Text(h, overflow: TextOverflow.ellipsis))),
+                ],
+                onChanged: (val) {
+                  if (val != null) {
+                    setState(() => _selectedHospital = val);
+                    _applyFilters();
+                  }
+                },
+              ),
             ),
           ),
         ],
@@ -188,7 +250,8 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
             child: InkWell(
               onTap: _isRefreshing ? null : () async {
                 setState(() => _isRefreshing = true);
-                await widget.onRefresh();
+                final q = _currentFilter == DateFilter.all ? _searchController.text.trim() : null;
+                await widget.onRefresh(searchQuery: q);
                 if (mounted) setState(() => _isRefreshing = false);
               },
               borderRadius: BorderRadius.circular(10),
@@ -221,22 +284,6 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
             ),
           ),
           const SizedBox(width: 4),
-          Tooltip(
-            message: "Logout",
-            child: InkWell(
-              onTap:        widget.onLogout,
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.danger.withValues(alpha: 0.07),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.power_settings_new_rounded, color: AppColors.danger, size: 20),
-              ),
-            ),
-          ),
-
         ],
       ),
     );
@@ -288,7 +335,7 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
           onChanged:   (v) { if (_currentFilter != DateFilter.all) _applyFilters(); },
           style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textPrimary),
           decoration: InputDecoration(
-            hintText:      _currentFilter == DateFilter.all ? "Search name / ID (min 4 chars)…" : "Filter list…",
+            hintText:      _currentFilter == DateFilter.all ? "Search name / ID / phone (min 2 chars)…" : "Filter list…",
             hintStyle:     GoogleFonts.poppins(fontSize: 12, color: AppColors.textMuted),
             prefixIcon:    const Icon(Icons.search_rounded, size: 20, color: AppColors.textMuted),
             border:        InputBorder.none,
@@ -458,11 +505,37 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
               },
             ),
             ListTile(
-              leading: const Icon(Icons.delete_outline_rounded, color: AppColors.danger),
-              title: const Text("Delete Registration"),
+              leading: const Icon(Icons.payments_outlined, color: AppColors.primary),
+              title: const Text("Add Payment / Discount"),
               onTap: () {
                 Navigator.pop(context);
-                _softDeletePatient(p);
+                widget.onAddPayment(p);
+              },
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.delete_outline_rounded, color: AppColors.danger),
+              title: const Text("Delete Registration"),
+              onTap: () async {
+                Navigator.pop(context);
+                final bool? confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text("Delete Registration"),
+                    content: const Text("Are you sure you want to delete this registration? This action cannot be undone."),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, true), 
+                        style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+                        child: const Text("Delete"),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true) {
+                  _softDeletePatient(p);
+                }
               },
             ),
           ],

@@ -211,7 +211,9 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
 
   late TextEditingController _followUpNoteController;
   late TextEditingController _clinicalNoteController;
+  late TextEditingController _privateNoteController;
   Timer? _notesDebounce;
+  Timer? _privateNotesDebounce;
 
   Map<String, dynamic>? _selectedReferDoctor;
 
@@ -240,6 +242,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
     super.initState();
     _followUpNoteController = TextEditingController();
     _clinicalNoteController = TextEditingController();
+    _privateNoteController = TextEditingController();
 
     // 1. Load Local Settings (Margins & Toggles)
     _loadSavedSettings();
@@ -252,6 +255,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
 
     // 4. Register Auto-Save for Notes
     _clinicalNoteController.addListener(_onNoteChanged);
+    _privateNoteController.addListener(_onPrivateNoteChanged);
   }
 
   void _onNoteChanged() {
@@ -261,17 +265,31 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
     });
   }
 
+  void _onPrivateNoteChanged() {
+    if (_privateNotesDebounce?.isActive ?? false) _privateNotesDebounce?.cancel();
+    _privateNotesDebounce = Timer(const Duration(seconds: 2), () {
+      if (mounted) _autoSavePrivateNote();
+    });
+  }
+
   Future<void> _autoSaveNote() async {
     final note = _clinicalNoteController.text;
     await ServerDataService.saveData(widget.opdId, 'clinical_notes', note, silent: true);
+  }
+
+  Future<void> _autoSavePrivateNote() async {
+    final note = _privateNoteController.text;
+    await ServerDataService.saveData(widget.opdId, 'private_note', note, silent: true);
   }
 
   @override
   void dispose() {
     ServerDataService.refreshNotifier.removeListener(_fetchAndMergeData);
     _notesDebounce?.cancel();
+    _privateNotesDebounce?.cancel();
     _followUpNoteController.dispose();
     _clinicalNoteController.dispose();
+    _privateNoteController.dispose();
     super.dispose();
   }
 
@@ -432,6 +450,11 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         // Only update if different (avoid cursor jumps/auto-save loops)
         if (_clinicalNoteController.text != loadedClinicalNote) {
            _clinicalNoteController.text = loadedClinicalNote;
+        }
+
+        String loadedPrivateNote = mergedData['private_note'] ?? "";
+        if (_privateNoteController.text != loadedPrivateNote) {
+          _privateNoteController.text = loadedPrivateNote;
         }
 
         if (mergedData['referring_doctor_name'] != null) {
@@ -694,6 +717,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
 
     try {
       await ServerDataService.saveData(opdId, 'clinical_notes', finalClinicalNote);
+      await ServerDataService.saveData(opdId, 'private_note', _privateNoteController.text);
 
       DateTime? nextReviewDate = _calculateNextReview();
 
@@ -708,6 +732,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         'follow_up_duration': _selectedFollowUp,
         'follow_up_note': finalFollowUpNote,
         'clinical_notes': finalClinicalNote,
+        'private_note': _privateNoteController.text,
         'referring_doctor_name': _selectedReferDoctor != null ? _selectedReferDoctor!['name'] : null,
         'next_review_date': nextReviewDate?.toIso8601String(),
         'is_finalized': true,
@@ -757,6 +782,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
 
     try {
       await ServerDataService.saveData(opdId, 'clinical_notes', finalClinicalNote);
+      await ServerDataService.saveData(opdId, 'private_note', _privateNoteController.text);
 
       DateTime? nextReviewDate = _calculateNextReview();
 
@@ -771,6 +797,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         'follow_up_duration': _selectedFollowUp,
         'follow_up_note': finalFollowUpNote,
         'clinical_notes': finalClinicalNote,
+        'private_note': _privateNoteController.text,
         'referring_doctor_name': _selectedReferDoctor != null ? _selectedReferDoctor!['name'] : null,
         'next_review_date': nextReviewDate?.toIso8601String(),
         'is_finalized': false, // Keep open for later
@@ -981,9 +1008,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
                       const SizedBox(height: 12),
                       TextField(
                         controller: _clinicalNoteController,
-                        onChanged: (val) {
-                          setState(() {});
-                        },
+                        onChanged: (val) => setState(() {}),
                         maxLines: 4,
                         style: const TextStyle(fontSize: 13),
                         decoration: InputDecoration(
@@ -991,6 +1016,35 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
                           isDense: true,
                           filled: true,
                           fillColor: Colors.grey[50],
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: PreviewTheme.border)),
+                          contentPadding: const EdgeInsets.all(12),
+                        ),
+                      ),
+
+                      const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Divider(height: 1, color: PreviewTheme.border)),
+
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          _buildSidebarSectionTitle("PRIVATE NOTE"),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                            child: const Text("NOT IN PDF", style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.red)),
+                          )
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _privateNoteController,
+                        onChanged: (val) => setState(() {}),
+                        maxLines: 3,
+                        style: const TextStyle(fontSize: 13, color: Colors.indigo),
+                        decoration: InputDecoration(
+                          hintText: "Internal remarks (won't print)...",
+                          isDense: true,
+                          filled: true,
+                          fillColor: Colors.indigo.withOpacity(0.02),
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: PreviewTheme.border)),
                           contentPadding: const EdgeInsets.all(12),
                         ),

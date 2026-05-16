@@ -15,7 +15,9 @@ import 'diagnosis_tab.dart';
 import 'blood_test_tab.dart';
 import 'history_tab.dart';
 import 'notes_dialog.dart';
+import 'patient_medical_history_page.dart';
 import '../services/server_data_service.dart';
+import 'canvas_management_page.dart';
 
 class NewConsultPage extends StatefulWidget {
   final Patient patient;
@@ -142,6 +144,42 @@ class _NewConsultPageState extends State<NewConsultPage> {
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
             tooltip: "Patient Documents",
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => PatientMedicalHistoryPage(
+                    uhid: widget.patient.id,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.person_search_rounded, size: 18),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            tooltip: "Medical History",
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => CanvasManagementPage(
+                    opdId: widget.opdId,
+                    uhid: widget.patient.id,
+                    patientName: widget.patient.name,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.gesture_rounded, size: 18),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            tooltip: "Clinical Canvas",
           ),
           const SizedBox(width: 8),
           IconButton(

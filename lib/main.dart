@@ -12,6 +12,7 @@ import 'package:infiplus_opd/supabase_handler.dart';
 import 'package:infiplus_opd/services/master_data_service.dart';
 import 'package:infiplus_opd/services/server_data_service.dart' as sds;
 import 'package:infiplus_opd/registration_form.dart';
+import 'package:infiplus_opd/payment_panel.dart';
 
 // ─────────────────────────────────────────────────────────────────
 //  GLOBAL DESIGN SYSTEM
@@ -61,6 +62,7 @@ class Patient {
   final String? createdAt;
   final bool isFinalized;
   final String visitStatus;
+  final String hospitalName;
   final Map<String, dynamic> fullData; // Raw data for editing
 
   DateTime get visitDate {
@@ -83,6 +85,7 @@ class Patient {
     this.createdAt,
     this.isFinalized = false,
     this.visitStatus = '',
+    this.hospitalName = '',
   });
 
   factory Patient.fromOpdMap(Map<String, dynamic> map) {
@@ -122,6 +125,7 @@ class Patient {
       createdAt: map['created_at'],
       isFinalized: map['is_finalized'] ?? false,
       visitStatus: map['visit_status']?.toString() ?? '',
+      hospitalName: map['hospital_name']?.toString() ?? '',
       fullData: map,
     );
   }
@@ -258,7 +262,7 @@ class SplashScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.1),
+                color: Colors.white.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
               child: const Icon(Icons.security_rounded, size: 64, color: Colors.white),
@@ -271,7 +275,7 @@ class SplashScreen extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text("Powering your clinical workspace",
-              style: GoogleFonts.poppins(fontSize: 14, color: Colors.white.withOpacity(0.7)),
+              style: GoogleFonts.poppins(fontSize: 14, color: Colors.white.withValues(alpha: 0.7)),
             ),
             const SizedBox(height: 48),
             const SizedBox(
@@ -520,7 +524,9 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
   bool _isOffline          = false;
   bool _isSyncing          = false;
   bool _isRegistering      = false;
+  bool _isAddingPayment    = false;
   Patient? _editingPatient;
+  Patient? _paymentPatient;
 
   late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
 
@@ -537,10 +543,6 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
     sds.ServerDataService.refreshNotifier.addListener(_syncWithCloud);
   }
 
-
-
-
-
   @override
   void dispose() {
     _connectivitySubscription.cancel();
@@ -556,20 +558,45 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
     }
   }
 
-  Future<void> _syncWithCloud() async {
+  Future<void> _syncWithCloud({String? searchQuery}) async {
     if (_isSyncing) return;
     if (mounted) {
       setState(() => _isSyncing = true);
     }
     try {
-      final response = await SupabaseHandler.client
+      final base = SupabaseHandler.client
           .from('opd_registration')
           .select('*, patient_detail!inner(*)')
-          .eq('is_Deleted', false)
-          .order('created_at', ascending: false)
-          .limit(50)
-          .timeout(const Duration(seconds: 10));
+          .eq('is_Deleted', false);
 
+      dynamic request;
+      if (searchQuery != null && searchQuery.isNotEmpty) {
+        final q = searchQuery.trim();
+        
+        // Step 1: Find patients that match the search query in patient_detail
+        // We use a separate query to be safe with cross-table filtering compatibility
+        final patientSearch = await SupabaseHandler.client
+            .from('patient_detail')
+            .select('uhid')
+            .or('name.ilike.*$q*,uhid.ilike.*$q*,number.eq.${int.tryParse(q) ?? -1}')
+            .limit(100);
+        
+        final matchingUhids = (patientSearch as List).map((p) => p['uhid'].toString()).toList();
+        
+        // Step 2: Query opd_registration for these UHIDs OR direct UHID matches
+        String orFilter = 'uhid.ilike.*$q*';
+        if (matchingUhids.isNotEmpty) {
+          // Join matching UHIDs into a CSV for the .in_() filter equivalent in an or() string
+          final uhidList = matchingUhids.map((id) => '"$id"').join(',');
+          orFilter += ',uhid.in.($uhidList)';
+        }
+        
+        request = base.or(orFilter);
+      } else {
+        request = base.order('created_at', ascending: false).limit(50);
+      }
+
+      final response = await request.timeout(const Duration(seconds: 10));
       final data = response as List<dynamic>;
 
       if (mounted) {
@@ -592,6 +619,30 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
       if (mounted) {
         setState(() => _isSyncing = false);
       }
+    }
+  }
+
+  Future<void> _showLogoutConfirmation() async {
+    final bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Logout Confirmation", style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+        content: Text("Are you sure you want to log out from your workspace?", style: GoogleFonts.poppins(fontSize: 14)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
+            child: const Text("Logout", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await SupabaseHandler.client.auth.signOut();
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
     }
   }
 
@@ -652,138 +703,181 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
     }
 
     return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ── Status Banner ─────────────────────────────────
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 350),
-              height: (_isOffline || _isSyncing) ? 28 : 0,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: _isOffline
-                      ? [const Color(0xFFF59E0B), const Color(0xFFD97706)]
-                      : [const Color(0xFF10B981), const Color(0xFF059669)],
+      body: Stack(
+        children: [
+          SafeArea(
+            child: Column(
+              children: [
+                // ── Status Banner ─────────────────────────────────
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 350),
+                  height: (_isOffline || _isSyncing) ? 28 : 0,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: _isOffline
+                          ? [const Color(0xFFF59E0B), const Color(0xFFD97706)]
+                          : [const Color(0xFF10B981), const Color(0xFF059669)],
+                    ),
+                  ),
+                  child: Center(
+                    child: _isOffline
+                        ? Text("OFFLINE MODE · CACHED DATA", style: GoogleFonts.poppins(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.2))
+                        : Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+                              const SizedBox(width: 8),
+                              Text("Syncing with cloud…", style: GoogleFonts.poppins(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+                            ],
+                          ),
+                  ),
                 ),
-              ),
-              child: Center(
-                child: _isOffline
-                    ? Text("OFFLINE MODE · CACHED DATA", style: GoogleFonts.poppins(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.2))
-                    : Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
-                          const SizedBox(width: 8),
-                          Text("Syncing with cloud…", style: GoogleFonts.poppins(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
-                        ],
-                      ),
-              ),
-            ),
 
-            Expanded(
-              child: Row(
-                children: [
-                  // ── LEFT SIDEBAR ─────────────────────────────
-                  if (isTablet || !_isRegistering)
-                    SizedBox(
-                      width: isTablet ? 380 : screenWidth,
-                      child: LeftPanelPatientList(
-                        patients:          patients,
-                        selectedIndex:     _selectedIndex,
-                        onPatientSelected: (index) async {
-                          setState(() {
-                            _selectedIndex = index;
-                            _isRegistering = false; // Close registration when patient selected
-                            _editingPatient = null;
-                          });
-                          if (!isTablet) {
-                            // On mobile, navigate to details page
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => Scaffold(
-                                  appBar: AppBar(
-                                    title: Text(patients[index].name, style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600)),
-                                    leading: IconButton(
-                                      icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
-                                      onPressed: () => Navigator.pop(context),
+                Expanded(
+                  child: Row(
+                    children: [
+                      // ── LEFT SIDEBAR ─────────────────────────────
+                      if (isTablet || !_isRegistering)
+                        SizedBox(
+                          width: isTablet ? 380 : screenWidth,
+                          child: LeftPanelPatientList(
+                            patients:          patients,
+                            selectedIndex:     _selectedIndex,
+                            onPatientSelected: (index) async {
+                              setState(() {
+                                _selectedIndex = index;
+                                _isRegistering = false; // Close registration when patient selected
+                                _editingPatient = null;
+                              });
+                              if (!isTablet) {
+                                // On mobile, navigate to details page
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => Scaffold(
+                                      appBar: AppBar(
+                                        title: Text(patients[index].name, style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600)),
+                                        leading: IconButton(
+                                          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
+                                          onPressed: () => Navigator.pop(context),
+                                        ),
+                                      ),
+                                      body: RightPanelPatientDetails(patient: patients[index]),
                                     ),
                                   ),
-                                  body: RightPanelPatientDetails(patient: patients[index]),
-                                ),
-                              ),
-                            );
-                            // Auto-refresh when returning from details
-                            _syncWithCloud();
-                          }
-                        },
-                        onRefresh:         _syncWithCloud,
-                        onLogout: () async {
-                          await SupabaseHandler.client.auth.signOut();
-                          if (!context.mounted) return;
-                          Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
-                        },
-                        onNewRegistration: () {
-                          setState(() {
-                            _isRegistering = true;
-                            _editingPatient = null;
-                          });
-                        },
-                        onEditPatient: (p) async {
-                          setState(() {
-                            _editingPatient = p;
-                            _isRegistering = true;
-                          });
-                          if (!isTablet) {
-                            // On mobile, show in a full screen modal/page
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => Scaffold(
-                                  body: RegistrationForm(
-                                    editPatient: p,
-                                    onCancel: () => Navigator.pop(context),
-                                    onSuccess: () => Navigator.pop(context),
+                                );
+                                // Auto-refresh when returning from details
+                                _syncWithCloud();
+                              }
+                            },
+                            onRefresh: ({searchQuery}) => _syncWithCloud(searchQuery: searchQuery),
+                            onNewRegistration: () {
+                              setState(() {
+                                _isRegistering = true;
+                                _editingPatient = null;
+                              });
+                            },
+                            onEditPatient: (p) async {
+                              setState(() {
+                                _editingPatient = p;
+                                _isRegistering = true;
+                                _isAddingPayment = false;
+                              });
+                              if (!isTablet) {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => Scaffold(
+                                      body: RegistrationForm(
+                                        editPatient: p,
+                                        onCancel: () => Navigator.pop(context),
+                                        onSuccess: () => Navigator.pop(context),
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ),
-                            );
-                            _syncWithCloud();
-                          }
-                        },
-                      ),
-                    ),
+                                );
+                                _syncWithCloud();
+                              }
+                            },
+                            onAddPayment: (p) async {
+                              setState(() {
+                                _paymentPatient = p;
+                                _isAddingPayment = true;
+                                _isRegistering = false;
+                              });
+                              if (!isTablet) {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => Scaffold(
+                                      body: PaymentPanel(
+                                        patient: p,
+                                        onCancel: () => Navigator.pop(context),
+                                        onSuccess: () => Navigator.pop(context),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                                _syncWithCloud();
+                              }
+                            },
+                          ),
+                        ),
 
-                  // ── RIGHT DETAIL PANEL / REGISTRATION FORM ───
-                  if (isTablet || _isRegistering)
-                    Expanded(
-                      child: Container(
-                        color: AppColors.bgBody,
-                        child: _isRegistering
-                            ? RegistrationForm(
-                                editPatient: _editingPatient,
-                                onCancel: () => setState(() {
-                                  _isRegistering = false;
-                                  _editingPatient = null;
-                                }),
-                                onSuccess: () {
-                                  setState(() {
-                                    _isRegistering = false;
-                                    _editingPatient = null;
-                                  });
-                                  _syncWithCloud();
-                                },
-                              )
-                            : RightPanelPatientDetails(patient: patients[_selectedIndex]),
-                      ),
-                    ),
-                ],
+                      // ── RIGHT DETAIL PANEL / REGISTRATION FORM ───
+                      if (isTablet || _isRegistering)
+                        Expanded(
+                          child: Container(
+                            color: AppColors.bgBody,
+                            child: _isRegistering
+                                ? RegistrationForm(
+                                    editPatient: _editingPatient,
+                                    onCancel: () => setState(() {
+                                      _isRegistering = false;
+                                      _editingPatient = null;
+                                    }),
+                                    onSuccess: () {
+                                      setState(() {
+                                        _isRegistering = false;
+                                        _editingPatient = null;
+                                      });
+                                      _syncWithCloud();
+                                    },
+                                  )
+                                : _isAddingPayment
+                                    ? PaymentPanel(
+                                        patient: _paymentPatient ?? patients[_selectedIndex],
+                                        onCancel: () => setState(() => _isAddingPayment = false),
+                                        onSuccess: () {
+                                          setState(() => _isAddingPayment = false);
+                                          _syncWithCloud();
+                                        },
+                                      )
+                                    : RightPanelPatientDetails(patient: patients[_selectedIndex]),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Hidden Logout Button (Subtle, but visible enough)
+          Positioned(
+            left: 10,
+            bottom: 10,
+            child: Opacity(
+              opacity: 0.4, // Increased from 0.15 for better visibility
+              child: IconButton(
+                icon: const Icon(Icons.logout_rounded, size: 18, color: AppColors.textMuted),
+                onPressed: _showLogoutConfirmation,
+                tooltip: "Logout",
               ),
             ),
-
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

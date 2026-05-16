@@ -1,10 +1,12 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class FullScreenSearchPage extends StatefulWidget {
   final String title;
   final String hintText;
-  final List<String> allItems;
+  final List<String>? allItems; 
+  final Future<List<String>> Function(String)? onSearch; 
   final Function(String) onItemSelected;
   final Function(String)? onItemRemoved;
 
@@ -12,7 +14,8 @@ class FullScreenSearchPage extends StatefulWidget {
     Key? key,
     required this.title,
     required this.hintText,
-    required this.allItems,
+    this.allItems,
+    this.onSearch,
     required this.onItemSelected,
     this.onItemRemoved,
   }) : super(key: key);
@@ -23,13 +26,100 @@ class FullScreenSearchPage extends StatefulWidget {
 
 class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _focusNode = FocusNode();
   String _searchQuery = "";
   List<String> _recentlyAdded = [];
+  List<String> _searchResults = [];
+  bool _isSearching = false;
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    
+    // ── NAVIGATION LAG FIX: Delay heavy operations until transition completes ──
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 450), () {
+        if (!mounted) return;
+        
+        // 1. Fetch initial results AFTER transition
+        if (widget.onSearch != null) {
+          _fetchInitialResults();
+        } else if (widget.allItems != null) {
+          setState(() {
+            _searchResults = List.from(widget.allItems!);
+          });
+        }
+        
+        // 2. Request focus AFTER transition
+        _focusNode.requestFocus();
+      });
+    });
+  }
+
+  Future<void> _fetchInitialResults() async {
+    if (!mounted) return;
+    setState(() => _isSearching = true);
+    try {
+      final results = await widget.onSearch!("");
+      if (mounted) {
+        setState(() {
+          _searchResults = results;
+          _isSearching = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isSearching = false);
+    }
+  }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _focusNode.dispose();
+    _debounce?.cancel();
     super.dispose();
+  }
+
+  void _onSearchChanged(String query) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    
+    if (query.isEmpty) {
+      _fetchInitialResults();
+      setState(() {
+        _searchQuery = "";
+      });
+      return;
+    }
+
+    _debounce = Timer(const Duration(milliseconds: 300), () async {
+      if (!mounted) return;
+      setState(() {
+        _searchQuery = query;
+        _isSearching = true;
+      });
+
+      try {
+        if (widget.onSearch != null) {
+          final results = await widget.onSearch!(query);
+          if (mounted) {
+            setState(() {
+              _searchResults = results;
+              _isSearching = false;
+            });
+          }
+        } else if (widget.allItems != null) {
+          setState(() {
+            _searchResults = widget.allItems!
+                .where((element) => element.toLowerCase().contains(query.toLowerCase()))
+                .toList();
+            _isSearching = false;
+          });
+        }
+      } catch (e) {
+        if (mounted) setState(() => _isSearching = false);
+      }
+    });
   }
 
   void _handleSelect(String item) {
@@ -40,19 +130,19 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
       }
       _searchController.clear();
       _searchQuery = "";
+      if (widget.onSearch == null && widget.allItems != null) {
+        _searchResults = widget.allItems!;
+      } else {
+        // Refresh list after selection
+        _fetchInitialResults();
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    List<String> filteredList = widget.allItems;
-    if (_searchQuery.isNotEmpty) {
-      filteredList = widget.allItems
-          .where((element) => element.toLowerCase().contains(_searchQuery.toLowerCase()))
-          .toList();
-    }
-
-    const Color primaryColor = Color(0xFF6366F1); // Indigo / Purple
+    final theme = Theme.of(context);
+    const Color primaryColor = Color(0xFF6366F1);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -63,32 +153,24 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
           icon: const Icon(Icons.close_rounded, color: Colors.grey, size: 24),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text(widget.title, style: GoogleFonts.poppins(color: const Color(0xFF0F172A), fontWeight: FontWeight.w600, fontSize: 16)),
+        title: Text(widget.title, style: const TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w600, fontSize: 16)),
         actions: [
           if (_searchQuery.isEmpty && _recentlyAdded.isNotEmpty)
             TextButton(
-              onPressed: () {
-                FocusScope.of(context).unfocus();
-                Navigator.pop(context);
-              },
-              child: Text("DONE", style: GoogleFonts.poppins(color: primaryColor, fontWeight: FontWeight.w700, fontSize: 14)),
+              onPressed: () => Navigator.pop(context),
+              child: const Text("DONE", style: TextStyle(color: primaryColor, fontWeight: FontWeight.w700, fontSize: 14)),
             ),
           const SizedBox(width: 8),
         ],
       ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       floatingActionButton: (_recentlyAdded.isNotEmpty && _searchQuery.isEmpty)
         ? FloatingActionButton.extended(
-            onPressed: () {
-              FocusScope.of(context).unfocus();
-              Navigator.pop(context);
-            },
+            onPressed: () => Navigator.pop(context),
             backgroundColor: primaryColor,
             elevation: 4,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             icon: const Icon(Icons.check_circle_outline_rounded, color: Colors.white),
-            label: Text("FINISH", 
-              style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white)),
+            label: const Text("FINISH", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white)),
           )
         : null,
       body: Column(
@@ -106,19 +188,21 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
               ),
               child: TextField(
                 controller: _searchController,
-                autofocus: true,
-                onChanged: (val) => setState(() => _searchQuery = val),
-                style: GoogleFonts.poppins(fontSize: 15),
+                focusNode: _focusNode,
+                onChanged: _onSearchChanged,
+                style: const TextStyle(fontSize: 15),
                 decoration: InputDecoration(
                   hintText: widget.hintText,
-                  hintStyle: GoogleFonts.poppins(color: const Color(0xFF94A3B8)),
+                  hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
                   prefixIcon: const Icon(Icons.search_rounded, color: Color(0xFF64748B)),
-                  suffixIcon: _searchQuery.isNotEmpty
+                  suffixIcon: _isSearching 
+                    ? const Padding(padding: EdgeInsets.all(14), child: SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: primaryColor)))
+                    : _searchQuery.isNotEmpty
                       ? IconButton(
                           icon: const Icon(Icons.clear_rounded, color: Color(0xFF94A3B8)),
                           onPressed: () {
                             _searchController.clear();
-                            setState(() => _searchQuery = "");
+                            _onSearchChanged("");
                           },
                         )
                       : null,
@@ -129,39 +213,24 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
             ),
           ),
 
-          // Integrated Add Button: Places it above keyboard and instantly visible
-          if (filteredList.isEmpty && _searchQuery.isNotEmpty)
+          // Add New Button
+          if (_searchResults.isEmpty && _searchQuery.isNotEmpty && !_isSearching)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: primaryColor.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: primaryColor.withValues(alpha: 0.2)),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        "Not found? Add '$_searchQuery' as new",
-                        style: GoogleFonts.poppins(fontSize: 13, color: const Color(0xFF0F172A), fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                    ElevatedButton.icon(
-                      onPressed: () => _handleSelect(_searchQuery.trim()),
-                      icon: const Icon(Icons.add_rounded, size: 16),
-                      label: const Text("Add"),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: primaryColor,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                    )
-                  ],
+              child: InkWell(
+                onTap: () => _handleSelect(_searchQuery.trim()),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(color: primaryColor.withOpacity(0.05), borderRadius: BorderRadius.circular(12), border: Border.all(color: primaryColor.withOpacity(0.2))),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.add_circle_outline_rounded, color: primaryColor),
+                      const SizedBox(width: 12),
+                      Expanded(child: Text("Add '$_searchQuery' as new", style: const TextStyle(fontSize: 14, color: Color(0xFF0F172A), fontWeight: FontWeight.w600))),
+                      const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: primaryColor),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -170,10 +239,7 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Text(
-                "Recently Added (Tap 'X' to remove)",
-                style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600, color: const Color(0xFF94A3B8)),
-              ),
+              child: const Text("Recently Added (Tap 'X' to remove)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF94A3B8))),
             ),
 
           if (_recentlyAdded.isNotEmpty && _searchQuery.isEmpty)
@@ -183,69 +249,74 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
                 spacing: 8,
                 runSpacing: 8,
                 children: _recentlyAdded.map((item) => InputChip(
-                  label: Text(item, style: GoogleFonts.poppins(fontSize: 13, color: primaryColor, fontWeight: FontWeight.w500)),
-                  backgroundColor: primaryColor.withValues(alpha: 0.1),
+                  label: Text(item, style: const TextStyle(fontSize: 13, color: primaryColor, fontWeight: FontWeight.w500)),
+                  backgroundColor: primaryColor.withOpacity(0.1),
                   side: BorderSide.none,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   deleteIcon: const Icon(Icons.cancel, color: primaryColor, size: 20),
                   onDeleted: () {
-                    setState(() {
-                      _recentlyAdded.remove(item);
-                    });
+                    setState(() => _recentlyAdded.remove(item));
                     widget.onItemRemoved?.call(item);
                   },
                 )).toList(),
               ),
             ),
 
-          if (_recentlyAdded.isNotEmpty && _searchQuery.isEmpty)
-            const SizedBox(height: 16),
+          if (_recentlyAdded.isNotEmpty && _searchQuery.isEmpty) const SizedBox(height: 16),
 
-          // List
+          // Search Results
           Expanded(
-            child: filteredList.isEmpty
-                ? Center(
-                    child: SingleChildScrollView(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.search_off_rounded, size: 64, color: const Color(0xFFCBD5E1)),
-                          const SizedBox(height: 16),
-                          Text("No results found", style: GoogleFonts.poppins(fontSize: 16, color: const Color(0xFF64748B))),
-                        ],
+            child: (_isSearching && _searchResults.isEmpty)
+              ? const Center(child: CircularProgressIndicator())
+              : (_searchResults.isEmpty && _searchQuery.isEmpty && widget.onSearch != null)
+                ? const Center(child: CircularProgressIndicator()) // Initial delay loading
+                : (_searchResults.isEmpty && _searchQuery.isNotEmpty)
+                  ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [const Icon(Icons.search_off_rounded, size: 64, color: Color(0xFFCBD5E1)), const SizedBox(height: 16), const Text("No matches found", style: TextStyle(fontSize: 14, color: Color(0xFF64748B)))]))
+                  : SingleChildScrollView(
+                      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Align(
+                        alignment: Alignment.topLeft,
+                        child: RepaintBoundary(
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 10,
+                            children: _searchResults.map((item) {
+                              return Material(
+                                key: ValueKey(item),
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: () => _handleSelect(item),
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(Icons.add_circle_outline_rounded, color: primaryColor, size: 14),
+                                        const SizedBox(width: 6),
+                                        Flexible(
+                                          child: Text(
+                                            item,
+                                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF0F172A)),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
                       ),
                     ),
-                  )
-                : SingleChildScrollView(
-                    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                    padding: const EdgeInsets.all(16),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 10,
-                      children: filteredList.map((item) {
-                        return InkWell(
-                          onTap: () => _handleSelect(item),
-                          borderRadius: BorderRadius.circular(8),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: const Color(0xFFE2E8F0)),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.add_circle_outline_rounded, color: primaryColor, size: 16),
-                                const SizedBox(width: 8),
-                                Text(item, style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500, color: const Color(0xFF0F172A))),
-                              ],
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
           ),
         ],
       ),

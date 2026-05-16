@@ -168,19 +168,20 @@ class _RegistrationFormState extends State<RegistrationForm> {
     setState(() => _isSearching = true);
     try {
       // name and uhid are text, so ilike works. 
-      // number is bigint, so we can only use eq unless we cast it on the server.
-      String orFilter = 'name.ilike.%$query%,uhid.ilike.%$query%';
+      // number is bigint, so we use eq for exact numeric match.
+      String q = query.trim();
+      String orFilter = 'name.ilike.*$q*,uhid.ilike.*$q*';
       
-      // If query is a number, try exact match on phone number
-      if (RegExp(r'^\d+$').hasMatch(query)) {
-        orFilter += ',number.eq.$query';
+      final num = int.tryParse(q);
+      if (num != null) {
+        orFilter += ',number.eq.$num';
       }
 
       final response = await SupabaseHandler.client
           .from('patient_detail')
           .select()
           .or(orFilter)
-          .limit(10);
+          .limit(20);
 
       if (mounted) {
         setState(() {
@@ -470,7 +471,12 @@ class _RegistrationFormState extends State<RegistrationForm> {
           _buildLargeSearchBox(),
           if (_searchController.text.isNotEmpty) ...[
             const SizedBox(height: 24),
-            _buildSearchResults(),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: _buildSearchResults(),
+              ),
+            ),
           ],
         ],
       ),

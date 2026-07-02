@@ -47,7 +47,7 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
           _fetchInitialResults();
         } else if (widget.allItems != null) {
           setState(() {
-            _searchResults = List.from(widget.allItems!);
+            _searchResults = widget.allItems!.toSet().toList();
           });
         }
         
@@ -64,7 +64,7 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
       final results = await widget.onSearch!("");
       if (mounted) {
         setState(() {
-          _searchResults = results;
+          _searchResults = results.toSet().toList();
           _isSearching = false;
         });
       }
@@ -104,7 +104,7 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
           final results = await widget.onSearch!(query);
           if (mounted) {
             setState(() {
-              _searchResults = results;
+              _searchResults = results.toSet().toList();
               _isSearching = false;
             });
           }
@@ -112,6 +112,7 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
           setState(() {
             _searchResults = widget.allItems!
                 .where((element) => element.toLowerCase().contains(query.toLowerCase()))
+                .toSet()
                 .toList();
             _isSearching = false;
           });
@@ -131,7 +132,7 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
       _searchController.clear();
       _searchQuery = "";
       if (widget.onSearch == null && widget.allItems != null) {
-        _searchResults = widget.allItems!;
+        _searchResults = widget.allItems!.toSet().toList();
       } else {
         // Refresh list after selection
         _fetchInitialResults();
@@ -281,9 +282,11 @@ class _FullScreenSearchPageState extends State<FullScreenSearchPage> {
                           child: Wrap(
                             spacing: 8,
                             runSpacing: 10,
-                            children: _searchResults.map((item) {
+                            children: _searchResults.asMap().entries.map((entry) {
+                              final index = entry.key;
+                              final item = entry.value;
                               return Material(
-                                key: ValueKey(item),
+                                key: ValueKey('$item-$index'),
                                 color: Colors.transparent,
                                 child: InkWell(
                                   onTap: () => _handleSelect(item),

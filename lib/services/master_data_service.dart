@@ -48,12 +48,13 @@ class MasterDataService {
   }
 
   Future<void> _syncMedicines() async {
-    final medResponse = await SupabaseHandler.client.from('opd_medicine').select('medicine_name, type, unit');
+    final medResponse = await SupabaseHandler.client.from('opd_medicine').select('medicine_name, type, unit, default_note');
     if (medResponse is List) {
       medicines = medResponse.map((row) => {
         'name': row['medicine_name']?.toString() ?? '',
         'type': row['type']?.toString() ?? '', 
         'unit': row['unit']?.toString() ?? '', 
+        'default_note': row['default_note']?.toString() ?? '', 
       }).toList();
       debugPrint("✅ Medicines Synced: ${medicines.length}");
     }
@@ -178,17 +179,24 @@ class MasterDataService {
 
   /// Saves or Updates a medicine in the opd_medicine table.
   /// This ensures that type (TAB/CAP) and unit (mg/ml) preferences are remembered.
-  Future<void> saveMedicine(String name, String type, String unit) async {
+  Future<void> saveMedicine(String name, String type, String unit, {String? defaultNote}) async {
     try {
       final nameClean = name.trim();
       if (nameClean.isEmpty) return;
 
       // 1. Update local memory cache for instant session parity
       final index = medicines.indexWhere((m) => m['name']?.toLowerCase() == nameClean.toLowerCase());
+      final Map<String, String> updatedMap = {
+        'name': nameClean,
+        'type': type,
+        'unit': unit,
+        if (defaultNote != null) 'default_note': defaultNote,
+      };
+
       if (index != -1) {
-        medicines[index] = {'name': nameClean, 'type': type, 'unit': unit};
+        medicines[index] = {...medicines[index], ...updatedMap};
       } else {
-        medicines.add({'name': nameClean, 'type': type, 'unit': unit});
+        medicines.add(updatedMap);
       }
 
       // 2. Check Cloud for existing record by name
@@ -198,19 +206,24 @@ class MasterDataService {
           .ilike('medicine_name', nameClean)
           .maybeSingle();
 
+      final Map<String, dynamic> updateFields = {
+        'type': type,
+        'unit': unit,
+        if (defaultNote != null) 'default_note': defaultNote,
+      };
+
       if (existing != null) {
         // Update existing medicine preference
         await SupabaseHandler.client
             .from('opd_medicine')
-            .update({'type': type, 'unit': unit})
+            .update(updateFields)
             .eq('id', existing['id']);
         debugPrint("✅ MasterDataService: Medicine '$nameClean' preferences updated.");
       } else {
         // Insert as new master record
         await SupabaseHandler.client.from('opd_medicine').insert({
           'medicine_name': nameClean,
-          'type': type,
-          'unit': unit,
+          ...updateFields,
         });
         debugPrint("✅ MasterDataService: Medicine '$nameClean' created in master list.");
       }

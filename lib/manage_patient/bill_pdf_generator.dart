@@ -133,6 +133,8 @@ class BillPdfGenerator {
 
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => pdf.save(),
+      format: PdfPageFormat.a5,
+      dynamicLayout: false,
       name: "Bill_${patient.id}_${patient.opdRegistrationId}.pdf",
     );
   }

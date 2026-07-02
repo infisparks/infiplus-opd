@@ -63,13 +63,33 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
       final rxData = _cloudData['rx_list_json'];
       final List<Map<String, String>> rxDisplay = (rxData is List) ? rxData.whereType<Map>().map<Map<String, String>>((item) {
         String freqFull = "";
+        String getDose(dynamic beforeVal, dynamic afterVal, String defaultDose) {
+          String parseSingle(dynamic val) {
+            if (val == null) return "0";
+            if (val is bool) return val ? defaultDose : "0";
+            final s = val.toString().trim();
+            return s.isEmpty ? "0" : s;
+          }
+          final b = parseSingle(beforeVal);
+          final a = parseSingle(afterVal);
+          if (b != "0") return b;
+          return a;
+        }
+
+        bool isActive(dynamic val) {
+          if (val == null) return false;
+          if (val is bool) return val;
+          final s = val.toString().trim();
+          return s.isNotEmpty && s != "0";
+        }
+
         if (item['timing'] is Map) {
           final t = item['timing'] as Map;
           String d = item['dosage']?.toString().trim() ?? "1";
           if (d.isEmpty) d = "1";
-          String m = (t['bb'] == true || t['ab'] == true) ? d : "0";
-          String a = (t['bl'] == true || t['al'] == true) ? d : "0";
-          String n = (t['bd'] == true || t['ad'] == true) ? d : "0";
+          String m = getDose(t['bb'], t['ab'], d);
+          String a = getDose(t['bl'], t['al'], d);
+          String n = getDose(t['bd'], t['ad'], d);
           freqFull = "$m-$a-$n";
         } else {
           freqFull = item['freq']?.toString() ?? "0-0-0";
@@ -78,12 +98,12 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         List<String> instParts = [];
         if (item['timing'] is Map) {
           final t = item['timing'] as Map;
-          if (t['bb'] == true) instParts.add("Before Breakfast");
-          if (t['ab'] == true) instParts.add("After Breakfast");
-          if (t['bl'] == true) instParts.add("Before Lunch");
-          if (t['al'] == true) instParts.add("After Lunch");
-          if (t['bd'] == true) instParts.add("Before Dinner");
-          if (t['ad'] == true) instParts.add("After Dinner");
+          if (isActive(t['bb'])) instParts.add("Before Breakfast");
+          if (isActive(t['ab'])) instParts.add("After Breakfast");
+          if (isActive(t['bl'])) instParts.add("Before Lunch");
+          if (isActive(t['al'])) instParts.add("After Lunch");
+          if (isActive(t['bd'])) instParts.add("Before Dinner");
+          if (isActive(t['ad'])) instParts.add("After Dinner");
         }
         String manualNote = item['note']?.toString() ?? '';
         if (manualNote.isNotEmpty) instParts.add(manualNote);
@@ -505,21 +525,40 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
     final List<Map<String, String>> rxDisplay = (rxData is List) ? rxData.whereType<Map>().map<Map<String, String>>((item) {
           // 1. Frequency (Full Form)
           String freqFull = "";
-          int count = 0;
           List<String> times = [];
           
+          bool isActive(dynamic val) {
+            if (val == null) return false;
+            if (val is bool) return val;
+            final s = val.toString().trim();
+            return s.isNotEmpty && s != "0";
+          }
+
+          String getDose(dynamic beforeVal, dynamic afterVal, String defaultDose) {
+            String parseSingle(dynamic val) {
+              if (val == null) return "0";
+              if (val is bool) return val ? defaultDose : "0";
+              final s = val.toString().trim();
+              return s.isEmpty ? "0" : s;
+            }
+            final b = parseSingle(beforeVal);
+            final a = parseSingle(afterVal);
+            if (b != "0") return b;
+            return a;
+          }
+
           if (item['timing'] is Map) {
             final t = item['timing'] as Map;
-            if (t['bb'] == true || t['ab'] == true) { count++; times.add("Morning"); }
-            if (t['bl'] == true || t['al'] == true) { count++; times.add("Afternoon"); }
-            if (t['bd'] == true || t['ad'] == true) { count++; times.add("Night"); }
+            if (isActive(t['bb']) || isActive(t['ab'])) { times.add("Morning"); }
+            if (isActive(t['bl']) || isActive(t['al'])) { times.add("Afternoon"); }
+            if (isActive(t['bd']) || isActive(t['ad'])) { times.add("Night"); }
           } else if (item['freq'] != null) {
             String f = item['freq'].toString().replaceAll(" ", ""); // Remove all spaces
             List<String> parts = f.split('-');
             if (parts.length == 3) {
-              if (parts[0] == '1') { count++; times.add("Morning"); }
-              if (parts[1] == '1') { count++; times.add("Afternoon"); }
-              if (parts[2] == '1') { count++; times.add("Night"); }
+              if (parts[0] != '0') { times.add("Morning"); }
+              if (parts[1] != '0') { times.add("Afternoon"); }
+              if (parts[2] != '0') { times.add("Night"); }
             }
           }
 
@@ -527,9 +566,9 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
             final t = item['timing'] as Map;
             String d = item['dosage']?.toString().trim() ?? "1";
             if (d.isEmpty) d = "1";
-            String m = (t['bb'] == true || t['ab'] == true) ? d : "0";
-            String a = (t['bl'] == true || t['al'] == true) ? d : "0";
-            String n = (t['bd'] == true || t['ad'] == true) ? d : "0";
+            String m = getDose(t['bb'], t['ab'], d);
+            String a = getDose(t['bl'], t['al'], d);
+            String n = getDose(t['bd'], t['ad'], d);
             freqFull = "$m-$a-$n";
           } else {
             freqFull = item['freq']?.toString() ?? "0-0-0";
@@ -539,12 +578,12 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
           List<String> instParts = [];
           if (item['timing'] is Map) {
             final t = item['timing'] as Map;
-            if (t['bb'] == true) instParts.add("Before Breakfast");
-            if (t['ab'] == true) instParts.add("After Breakfast");
-            if (t['bl'] == true) instParts.add("Before Lunch");
-            if (t['al'] == true) instParts.add("After Lunch");
-            if (t['bd'] == true) instParts.add("Before Dinner");
-            if (t['ad'] == true) instParts.add("After Dinner");
+            if (isActive(t['bb'])) instParts.add("Before Breakfast");
+            if (isActive(t['ab'])) instParts.add("After Breakfast");
+            if (isActive(t['bl'])) instParts.add("Before Lunch");
+            if (isActive(t['al'])) instParts.add("After Lunch");
+            if (isActive(t['bd'])) instParts.add("Before Dinner");
+            if (isActive(t['ad'])) instParts.add("After Dinner");
           }
           
           // Append manual note if exists

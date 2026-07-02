@@ -631,10 +631,23 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
       String freq = "0-0-0";
       if (item['timing_json'] is Map) {
         var t = item['timing_json'];
-        bool bb = t['bb']??false, ab = t['ab']??false;
-        bool bl = t['bl']??false, al = t['al']??false;
-        bool bd = t['bd']??false, ad = t['ad']??false;
-        freq = "${(bb||ab)?1:0}-${(bl||al)?1:0}-${(bd||ad)?1:0}";
+        String getVal(dynamic val) {
+          if (val == null) return "0";
+          if (val is bool) return val ? "1" : "0";
+          final s = val.toString().trim();
+          return s.isEmpty ? "0" : s;
+        }
+        String bb = getVal(t['bb']);
+        String ab = getVal(t['ab']);
+        String bl = getVal(t['bl']);
+        String al = getVal(t['al']);
+        String bd = getVal(t['bd']);
+        String ad = getVal(t['ad']);
+        
+        String m = bb != "0" ? bb : ab;
+        String a = bl != "0" ? bl : al;
+        String n = bd != "0" ? bd : ad;
+        freq = "$m-$a-$n";
       }
       return {
         "name": "${item['medicine_name']} ${item['dosage'] ?? ''}",

@@ -23,20 +23,20 @@ class TxTheme {
 
 // --- MODELS ---
 class TimingSchedule {
-  bool beforeBreakfast;
-  bool afterBreakfast;
-  bool beforeLunch;
-  bool afterLunch;
-  bool beforeDinner;
-  bool afterDinner;
+  String beforeBreakfast;
+  String afterBreakfast;
+  String beforeLunch;
+  String afterLunch;
+  String beforeDinner;
+  String afterDinner;
 
   TimingSchedule({
-    this.beforeBreakfast = false,
-    this.afterBreakfast = false,
-    this.beforeLunch = false,
-    this.afterLunch = false,
-    this.beforeDinner = false,
-    this.afterDinner = false,
+    this.beforeBreakfast = "0",
+    this.afterBreakfast = "0",
+    this.beforeLunch = "0",
+    this.afterLunch = "0",
+    this.beforeDinner = "0",
+    this.afterDinner = "0",
   });
 
   Map<String, dynamic> toJson() => {
@@ -46,10 +46,21 @@ class TimingSchedule {
   };
 
   factory TimingSchedule.fromJson(Map<String, dynamic> json) {
+    String parseVal(dynamic val) {
+      if (val is bool) {
+        return val ? "1" : "0";
+      }
+      if (val == null) return "0";
+      return val.toString();
+    }
+
     return TimingSchedule(
-      beforeBreakfast: json['bb'] ?? false, afterBreakfast: json['ab'] ?? false,
-      beforeLunch: json['bl'] ?? false, afterLunch: json['al'] ?? false,
-      beforeDinner: json['bd'] ?? false, afterDinner: json['ad'] ?? false,
+      beforeBreakfast: parseVal(json['bb']),
+      afterBreakfast: parseVal(json['ab']),
+      beforeLunch: parseVal(json['bl']),
+      afterLunch: parseVal(json['al']),
+      beforeDinner: parseVal(json['bd']),
+      afterDinner: parseVal(json['ad']),
     );
   }
 }
@@ -351,6 +362,14 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
     if (_debounce?.isActive ?? false) _debounce!.cancel();
     _debounce = Timer(const Duration(milliseconds: 500), () {
       ServerDataService.saveData(widget.opdId, 'treatment_data', jsonList, silent: true);
+      if (_selectedMedicine != null) {
+        MasterDataService().saveMedicine(
+          _selectedMedicine!.name,
+          _selectedMedicine!.type,
+          _selectedMedicine!.unit,
+          defaultNote: _selectedMedicine!.note,
+        );
+      }
     });
   }
 
@@ -359,6 +378,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
       // Find extra data from master list if it exists
       String finalType = type;
       String finalUnit = "";
+      String finalNote = "";
       
       final masterItem = _medicineMasterList.firstWhere(
         (m) => m['name'] == name, 
@@ -368,13 +388,15 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
       if (masterItem.isNotEmpty) {
         finalType = masterItem['type'] ?? type;
         finalUnit = masterItem['unit'] ?? "";
+        finalNote = masterItem['default_note'] ?? "";
       }
 
       final newMed = PrescriptionEntry(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           name: name,
           type: finalType,
-          unit: finalUnit
+          unit: finalUnit,
+          note: finalNote
       );
 
       // Auto-set common dosages based on type if unit is empty
@@ -609,9 +631,21 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                     String freq = "0-0-0";
                     if(m['timing'] != null) {
                       final t = m['timing'];
-                      int m1 = ((t['bb']??false) || (t['ab']??false)) ? 1 : 0;
-                      int m2 = ((t['bl']??false) || (t['al']??false)) ? 1 : 0;
-                      int m3 = ((t['bd']??false) || (t['ad']??false)) ? 1 : 0;
+                      String getVal(dynamic b, dynamic a) {
+                        String parseSingle(dynamic val) {
+                          if (val == null) return "0";
+                          if (val is bool) return val ? "1" : "0";
+                          final s = val.toString().trim();
+                          return s.isEmpty ? "0" : s;
+                        }
+                        final bVal = parseSingle(b);
+                        final aVal = parseSingle(a);
+                        if (bVal != "0") return bVal;
+                        return aVal;
+                      }
+                      String m1 = getVal(t['bb'], t['ab']);
+                      String m2 = getVal(t['bl'], t['al']);
+                      String m3 = getVal(t['bd'], t['ad']);
                       freq = "$m1-$m2-$m3";
                     }
 
@@ -842,9 +876,13 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                       String freq = "0-0-0";
                       if(med.timing != null) {
                         final t = med.timing!;
-                        int m1 = ((t.beforeBreakfast) || (t.afterBreakfast)) ? 1 : 0;
-                        int m2 = ((t.beforeLunch) || (t.afterLunch)) ? 1 : 0;
-                        int m3 = ((t.beforeDinner) || (t.afterDinner)) ? 1 : 0;
+                        String getVal(String b, String a) {
+                          if (b != "0") return b;
+                          return a;
+                        }
+                        String m1 = getVal(t.beforeBreakfast, t.afterBreakfast);
+                        String m2 = getVal(t.beforeLunch, t.afterLunch);
+                        String m3 = getVal(t.beforeDinner, t.afterDinner);
                         freq = "$m1-$m2-$m3";
                       }
 
@@ -1132,16 +1170,21 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                         const SizedBox(width: 8),
                         // Unit
                         _buildHeaderDropdown(
-                          value: ["mg","ml","mcg","tab","cap","tsp","drop","IU","inj","amp"].contains(med.unit) ? med.unit : null,
-                          items: ["mg","ml","mcg","tab","cap","tsp","drop","IU","inj","amp"],
+                          value: med.unit.isNotEmpty ? med.unit : null,
+                          items: ["mg","ml","mcg","tab","cap","tsp","drop","IU","inj","amp", if (med.unit.isNotEmpty && !["mg","ml","mcg","tab","cap","tsp","drop","IU","inj","amp"].contains(med.unit)) med.unit, "Other..."],
                           hint: "UNIT",
                           bgColor: TxTheme.primary.withAlpha(10),
                           textColor: TxTheme.primary,
                           onChanged: (v) { 
-                            if(v!=null) {
-                              setState(()=>med.unit=v); 
+                            if (v == "Other...") {
+                              _showCustomUnitDialog(context, (customUnit) {
+                                setState(() => med.unit = customUnit);
+                                _autoSave();
+                                MasterDataService().saveMedicine(med.name, med.type, customUnit);
+                              });
+                            } else if (v != null) {
+                              setState(() => med.unit = v); 
                               _autoSave();
-                              // REMEMBER UNIT PREFERENCE
                               MasterDataService().saveMedicine(med.name, med.type, v);
                             }
                           },
@@ -1241,19 +1284,19 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
               const SizedBox(height: 12),
               Row(
                 children: [
-                  Expanded(child: _buildModernTimingBlock("Breakfast", Icons.wb_twilight_rounded,
+                  Expanded(child: _buildModernTimingBlock("Breakfast", Icons.wb_twilight_rounded, med,
                       med.timing.beforeBreakfast, med.timing.afterBreakfast,
                           (v) { setState(() => med.timing.beforeBreakfast = v); _autoSave(); },
                           (v) { setState(() => med.timing.afterBreakfast = v); _autoSave(); }
                   )),
                   const SizedBox(width: 12),
-                  Expanded(child: _buildModernTimingBlock("Lunch", Icons.wb_sunny_rounded,
+                  Expanded(child: _buildModernTimingBlock("Lunch", Icons.wb_sunny_rounded, med,
                       med.timing.beforeLunch, med.timing.afterLunch,
                           (v) { setState(() => med.timing.beforeLunch = v); _autoSave(); },
                           (v) { setState(() => med.timing.afterLunch = v); _autoSave(); }
                   )),
                   const SizedBox(width: 12),
-                  Expanded(child: _buildModernTimingBlock("Dinner", Icons.nights_stay_rounded,
+                  Expanded(child: _buildModernTimingBlock("Dinner", Icons.nights_stay_rounded, med,
                       med.timing.beforeDinner, med.timing.afterDinner,
                           (v) { setState(() => med.timing.beforeDinner = v); _autoSave(); },
                           (v) { setState(() => med.timing.afterDinner = v); _autoSave(); }
@@ -1443,25 +1486,117 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
     );
   }
 
-  Widget _buildModernTimingBlock(String label, IconData icon, bool beforeVal, bool afterVal, Function(bool) setBefore, Function(bool) setAfter) {
+  Widget _buildModernTimingBlock(String label, IconData icon, PrescriptionEntry med, String beforeVal, String afterVal, Function(String) setBefore, Function(String) setAfter) {
+    bool isBeforeActive = beforeVal != "0";
+    bool isAfterActive = afterVal != "0";
+    bool isAnyActive = isBeforeActive || isAfterActive;
+    String activeDose = isBeforeActive ? beforeVal : (isAfterActive ? afterVal : med.dosage);
+
+    List<String> doseOptions;
+    if (med.type == "SYRUP" || med.type == "SUSP" || med.type == "DROP" || med.unit == "ml" || med.unit == "tsp" || med.unit == "drop") {
+      doseOptions = ["0.5", "1", "2", "2.5", "5", "7.5", "10", "15", "20", "30", "40", "50"];
+    } else if (med.type == "INJ" || med.unit == "inj" || med.unit == "amp") {
+      doseOptions = ["0.5", "1", "2", "3", "4", "5", "10"];
+    } else {
+      doseOptions = ["0.25", "0.5", "1", "1.5", "2", "3", "4"];
+    }
+
+    if (!doseOptions.contains(activeDose)) {
+      doseOptions.add(activeDose);
+    }
+
+    // Dropdown items
+    List<DropdownMenuItem<String>> menuItems = doseOptions.map((val) => DropdownMenuItem<String>(
+      value: val,
+      child: Text("$val ${med.unit}"),
+    )).toList();
+    
+    menuItems.add(const DropdownMenuItem<String>(
+      value: "custom",
+      child: Text("Custom...", style: TextStyle(color: TxTheme.primary, fontWeight: FontWeight.bold)),
+    ));
+
     return Container(
       decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: TxTheme.border),
-          ),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: TxTheme.border),
+      ),
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Icon(icon, color: TxTheme.textSub, size: 20),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Icon(icon, color: isAnyActive ? TxTheme.primary : TxTheme.textSub, size: 20),
+                if (isAnyActive)
+                  Container(
+                    height: 24,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    decoration: BoxDecoration(
+                      color: TxTheme.primary.withAlpha(20),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: activeDose,
+                        isDense: true,
+                        icon: const Icon(Icons.arrow_drop_down, size: 14, color: TxTheme.primary),
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: TxTheme.primary),
+                        dropdownColor: Colors.white,
+                        items: menuItems,
+                        onChanged: (val) {
+                          if (val == "custom") {
+                            _showCustomDosageDialog(context, med.unit, (customVal) {
+                              if (isBeforeActive) setBefore(customVal);
+                              if (isAfterActive) setAfter(customVal);
+                            });
+                          } else if (val != null) {
+                            if (isBeforeActive) setBefore(val);
+                            if (isAfterActive) setAfter(val);
+                          }
+                        },
+                      ),
+                    ),
+                  )
+                else
+                  const SizedBox(height: 24), // Consistent layout height
+              ],
+            ),
           ),
           const Divider(height: 1, color: TxTheme.border),
           Row(
             children: [
-              Expanded(child: _buildTimeToggle("Before", beforeVal, setBefore)),
+              Expanded(
+                child: _buildTimeToggle(
+                  "Before",
+                  isBeforeActive,
+                  () {
+                    if (isBeforeActive) {
+                      setBefore("0");
+                    } else {
+                      setBefore(activeDose);
+                      setAfter("0");
+                    }
+                  },
+                ),
+              ),
               Container(width: 1, height: 35, color: TxTheme.border),
-              Expanded(child: _buildTimeToggle("After", afterVal, setAfter)),
+              Expanded(
+                child: _buildTimeToggle(
+                  "After",
+                  isAfterActive,
+                  () {
+                    if (isAfterActive) {
+                      setAfter("0");
+                    } else {
+                      setAfter(activeDose);
+                      setBefore("0");
+                    }
+                  },
+                ),
+              ),
             ],
           )
         ],
@@ -1469,9 +1604,9 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
     );
   }
 
-  Widget _buildTimeToggle(String text, bool isActive, Function(bool) onTap) {
+  Widget _buildTimeToggle(String text, bool isActive, VoidCallback onTap) {
     return InkWell(
-      onTap: () => onTap(!isActive),
+      onTap: onTap,
       child: Container(
         height: 35,
         alignment: Alignment.center,
@@ -1652,6 +1787,90 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
               ],
             );
           }
+        );
+      },
+    );
+  }
+
+  void _showCustomDosageDialog(BuildContext context, String unit, Function(String) onConfirm) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text("Custom Dosage ($unit)", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16)),
+          content: TextField(
+            controller: controller,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              hintText: "Enter dosage (e.g. 2.5, 12, 50)",
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("CANCEL"),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final val = controller.text.trim();
+                if (val.isNotEmpty) {
+                  onConfirm(val);
+                }
+                Navigator.pop(context);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: TxTheme.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: const Text("SAVE"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showCustomUnitDialog(BuildContext context, Function(String) onConfirm) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text("Custom Unit", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16)),
+          content: TextField(
+            controller: controller,
+            textCapitalization: TextCapitalization.none,
+            decoration: InputDecoration(
+              hintText: "Enter unit (e.g. puff, sachet, patch)",
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("CANCEL"),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final val = controller.text.trim().toLowerCase();
+                if (val.isNotEmpty) {
+                  onConfirm(val);
+                }
+                Navigator.pop(context);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: TxTheme.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: const Text("SAVE"),
+            ),
+          ],
         );
       },
     );

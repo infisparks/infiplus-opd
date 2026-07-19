@@ -52,7 +52,7 @@ class _PatientMedicalHistoryPageState extends State<PatientMedicalHistoryPage> {
   Map<String, dynamic>? _selectedTravelItem;
 
   // --- Constants ---
-  final List<String> _doseOptions = ["1/4", "1/2", "1", "1½", "2", "3"];
+  final List<String> _doseOptions = ["0.25", "0.5", "1", "1.5", "2", "3"];
   final List<String> _durationOptions = ["1d", "2d", "3d", "4d", "5d", "1m", "2m", "3m", "4m", "6m", "1y", "2y", "5y"];
   
   final TextEditingController _noteController = TextEditingController();

@@ -228,6 +228,9 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
 
   // Notes & Follow Up State
   String _selectedFollowUp = "";
+  bool _showCustomFollowUp = false;
+  int _customFollowUpNumber = 1;
+  String _customFollowUpUnit = 'd'; // 'd' = Day, 'm' = Month, 'y' = Year
 
   late TextEditingController _followUpNoteController;
   late TextEditingController _clinicalNoteController;
@@ -806,7 +809,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
       if (_selectedFollowUp.contains("d")) return now.add(Duration(days: int.parse(_selectedFollowUp.replaceAll("d", ""))));
       if (_selectedFollowUp.contains("w")) return now.add(Duration(days: int.parse(_selectedFollowUp.replaceAll("w", "")) * 7));
       if (_selectedFollowUp.contains("m")) return now.add(Duration(days: int.parse(_selectedFollowUp.replaceAll("m", "")) * 30));
-      if (_selectedFollowUp.contains("y")) return now.add(const Duration(days: 365));
+      if (_selectedFollowUp.contains("y")) return now.add(Duration(days: int.parse(_selectedFollowUp.replaceAll("y", "")) * 365));
     } catch (e) {
       return null;
     }
@@ -1015,22 +1018,137 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
                       const SizedBox(height: 12),
                       Wrap(
                         spacing: 8, runSpacing: 8,
-                        children: ["3d", "5d", "1w", "2w", "1m", "45d", "3m", "6m", "1y"].map((dur) {
-                          bool isSelected = _selectedFollowUp == dur;
-                          return InkWell(
+                        children: [
+                          ...["3d", "5d", "1w", "2w", "1m", "45d", "3m", "6m", "1y"].map((dur) {
+                            bool isSelected = _selectedFollowUp == dur && !_showCustomFollowUp;
+                            return InkWell(
+                              onTap: () {
+                                setState(() {
+                                  _selectedFollowUp = dur;
+                                  _showCustomFollowUp = false;
+                                });
+                              },
+                              borderRadius: BorderRadius.circular(6),
+                              child: Container(
+                                width: 42, height: 32,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(color: isSelected ? PreviewTheme.primary : Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: isSelected ? PreviewTheme.primary : PreviewTheme.border)),
+                                child: Text(dur, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: isSelected ? Colors.white : PreviewTheme.textSub)),
+                              ),
+                            );
+                          }),
+                          // Custom chip
+                          InkWell(
                             onTap: () {
-                              setState(() => _selectedFollowUp = dur);
+                              setState(() {
+                                _showCustomFollowUp = !_showCustomFollowUp;
+                                if (_showCustomFollowUp) {
+                                  // Build the value immediately on open
+                                  _selectedFollowUp = "$_customFollowUpNumber$_customFollowUpUnit";
+                                }
+                              });
                             },
                             borderRadius: BorderRadius.circular(6),
                             child: Container(
-                              width: 42, height: 32,
+                              height: 32,
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
                               alignment: Alignment.center,
-                              decoration: BoxDecoration(color: isSelected ? PreviewTheme.primary : Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: isSelected ? PreviewTheme.primary : PreviewTheme.border)),
-                              child: Text(dur, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: isSelected ? Colors.white : PreviewTheme.textSub)),
+                              decoration: BoxDecoration(
+                                color: _showCustomFollowUp ? PreviewTheme.primary : Colors.white,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: _showCustomFollowUp ? PreviewTheme.primary : PreviewTheme.border),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.tune_rounded, size: 12, color: _showCustomFollowUp ? Colors.white : PreviewTheme.textSub),
+                                  const SizedBox(width: 4),
+                                  Text("Custom", style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _showCustomFollowUp ? Colors.white : PreviewTheme.textSub)),
+                                ],
+                              ),
                             ),
-                          );
-                        }).toList(),
+                          ),
+                        ],
                       ),
+                      // Custom Follow-Up Inline Picker
+                      if (_showCustomFollowUp) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withOpacity(0.04),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: PreviewTheme.primary.withOpacity(0.2)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Text("After", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: PreviewTheme.textSub)),
+                              const SizedBox(width: 8),
+                              // Number picker
+                              Container(
+                                height: 34,
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: PreviewTheme.border),
+                                ),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<int>(
+                                    value: _customFollowUpNumber,
+                                    isDense: true,
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: PreviewTheme.textMain),
+                                    items: List.generate(99, (i) => i + 1).map((n) => DropdownMenuItem(value: n, child: Text(n.toString()))).toList(),
+                                    onChanged: (v) {
+                                      if (v != null) setState(() {
+                                        _customFollowUpNumber = v;
+                                        _selectedFollowUp = "$v$_customFollowUpUnit";
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              // Unit picker
+                              Container(
+                                height: 34,
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: PreviewTheme.border),
+                                ),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String>(
+                                    value: _customFollowUpUnit,
+                                    isDense: true,
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: PreviewTheme.textMain),
+                                    items: const [
+                                      DropdownMenuItem(value: 'd', child: Text('Day')),
+                                      DropdownMenuItem(value: 'm', child: Text('Month')),
+                                      DropdownMenuItem(value: 'y', child: Text('Year')),
+                                    ],
+                                    onChanged: (v) {
+                                      if (v != null) setState(() {
+                                        _customFollowUpUnit = v;
+                                        _selectedFollowUp = "$_customFollowUpNumber$v";
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ),
+                              const Spacer(),
+                              // Preview badge
+                              if (_selectedFollowUp.isNotEmpty)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(color: PreviewTheme.primary, borderRadius: BorderRadius.circular(4)),
+                                  child: Text(_selectedFollowUp, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
 
                       if (_selectedFollowUp.isNotEmpty) ...[
                         const SizedBox(height: 12),

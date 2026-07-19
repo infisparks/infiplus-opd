@@ -51,7 +51,11 @@ class TimingSchedule {
         return val ? "1" : "0";
       }
       if (val == null) return "0";
-      return val.toString();
+      final s = val.toString().trim();
+      if (s == "1/4") return "0.25";
+      if (s == "1/2") return "0.5";
+      if (s == "1½") return "1.5";
+      return s;
     }
 
     return TimingSchedule(
@@ -85,8 +89,16 @@ class PrescriptionEntry {
     this.duration = "1d",
     this.note = "",
   }) :
-        this.dosage = dosage ?? "1",
+        this.dosage = _cleanDose(dosage ?? "1"),
         this.timing = timing ?? TimingSchedule();
+
+  static String _cleanDose(String raw) {
+    final val = raw.trim();
+    if (val == "1/4") return "0.25";
+    if (val == "1/2") return "0.5";
+    if (val == "1½") return "1.5";
+    return val;
+  }
 
   Map<String, dynamic> toJson() => {
     'id': id, 'name': name, 'type': type, 'unit': unit,
@@ -128,7 +140,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
   // Data State
   List<PrescriptionEntry> _currentPrescription = [];
   PrescriptionEntry? _selectedMedicine;
-  List<Map<String, String>> _medicineMasterList = [];
+  List<Map<String, dynamic>> _medicineMasterList = [];
   List<String> _suggestedMeds = [];
   bool _isOnline = true;
 
@@ -145,7 +157,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
   Timer? _debounce;
 
   // Constants
-  final List<String> _doseOptions = ["1/4", "1/2", "1", "1½", "2", "3"];
+  final List<String> _doseOptions = ["0.25", "0.5", "1", "1.5", "2", "3"];
   final List<String> _durationOptions = ["3d", "5d", "7d", "10d", "15d", "1m", "2m", "3m"];
 
   @override
@@ -368,6 +380,11 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
           _selectedMedicine!.type,
           _selectedMedicine!.unit,
           defaultNote: _selectedMedicine!.note,
+          metadata: {
+            'dosage': _selectedMedicine!.dosage,
+            'duration': _selectedMedicine!.duration,
+            'timing': _selectedMedicine!.timing.toJson(),
+          },
         );
       }
     });
@@ -379,6 +396,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
       String finalType = type;
       String finalUnit = "";
       String finalNote = "";
+      Map<String, dynamic>? meta;
       
       final masterItem = _medicineMasterList.firstWhere(
         (m) => m['name'] == name, 
@@ -389,6 +407,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
         finalType = masterItem['type'] ?? type;
         finalUnit = masterItem['unit'] ?? "";
         finalNote = masterItem['default_note'] ?? "";
+        meta = masterItem['metadata'] as Map<String, dynamic>?;
       }
 
       final newMed = PrescriptionEntry(
@@ -399,14 +418,30 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
           note: finalNote
       );
 
-      // Auto-set common dosages based on type if unit is empty
-      if (finalUnit.isEmpty) {
-        if (finalType == "SYRUP" || finalType == "SUSP" || finalType == "DROP") {
-          newMed.unit = "ml";
-          newMed.dosage = "10";
-        } else if (finalType == "TAB" || finalType == "CAP") {
-          newMed.unit = finalType.toLowerCase();
-          newMed.dosage = "1";
+      if (meta != null) {
+        if (meta['dosage'] != null) {
+          newMed.dosage = meta['dosage'].toString();
+        }
+        if (meta['duration'] != null) {
+          newMed.duration = meta['duration'].toString();
+        }
+        if (meta['timing'] != null) {
+          try {
+            newMed.timing = TimingSchedule.fromJson(Map<String, dynamic>.from(meta['timing']));
+          } catch (e) {
+            debugPrint("Error parsing metadata timing: $e");
+          }
+        }
+      } else {
+        // Auto-set common dosages based on type if unit is empty
+        if (finalUnit.isEmpty) {
+          if (finalType == "SYRUP" || finalType == "SUSP" || finalType == "DROP") {
+            newMed.unit = "ml";
+            newMed.dosage = "10";
+          } else if (finalType == "TAB" || finalType == "CAP") {
+            newMed.unit = finalType.toLowerCase();
+            newMed.dosage = "1";
+          }
         }
       }
 
@@ -479,7 +514,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
       setState(() {
         _suggestedMeds = _medicineMasterList
             .take(15)
-            .map((e) => e['name'] ?? '')
+            .map<String>((e) => (e['name'] ?? '').toString())
             .where((n) => n.isNotEmpty)
             .toList();
       });
@@ -765,7 +800,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                   builder: (ctx) => FullScreenSearchPage(
                     title: "Search Medicines",
                     hintText: "Type medicine name...",
-                    allItems: _medicineMasterList.map((e) => e['name'] ?? '').where((n) => n.isNotEmpty).toList(),
+                    allItems: _medicineMasterList.map<String>((e) => (e['name'] ?? '').toString()).where((n) => n.isNotEmpty).toList(),
                     onItemSelected: (selected) {
                       if (!_medicineMasterList.any((m) => m['name'] == selected)) {
                         _medicineMasterList.add({'name': selected, 'type': 'TAB', 'unit': ''});
@@ -1127,12 +1162,12 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                                           }
                                         } else if (type == "TAB") {
                                           med.unit = "tab";
-                                          if (!["1/4", "1/2", "1", "1½", "2", "3"].contains(med.dosage)) {
+                                          if (!["0.25", "0.5", "1", "1.5", "2", "3"].contains(med.dosage)) {
                                             med.dosage = "1";
                                           }
                                         } else if (type == "CAP") {
                                           med.unit = "cap";
-                                          if (!["1/4", "1/2", "1", "1½", "2", "3"].contains(med.dosage)) {
+                                          if (!["0.25", "0.5", "1", "1.5", "2", "3"].contains(med.dosage)) {
                                             med.dosage = "1";
                                           }
                                         } else if (type == "INJ") {
@@ -1261,10 +1296,20 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                       borderRadius: BorderRadius.circular(12),
                       menuMaxHeight: 300,
                       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: TxTheme.primary),
-                      items: List.generate(100, (i) => (i + 1).toString()).map((v) => DropdownMenuItem(
-                        value: v, 
-                        child: Center(child: Text(v))
-                      )).toList(),
+                      items: () {
+                        final val = !currentDoseOptions.contains(med.dosage) ? med.dosage : null;
+                        final list = List.generate(100, (i) => (i + 1).toString()).map((v) => DropdownMenuItem(
+                          value: v, 
+                          child: Center(child: Text(v))
+                        )).toList();
+                        if (val != null && !list.any((item) => item.value == val)) {
+                          list.add(DropdownMenuItem(
+                            value: val,
+                            child: Center(child: Text(val)),
+                          ));
+                        }
+                        return list;
+                      }(),
                       onChanged: (v) {
                         if (v != null) {
                           setState(() {
@@ -1350,10 +1395,20 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                                 borderRadius: BorderRadius.circular(12),
                                 menuMaxHeight: 300,
                                 style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: TxTheme.textMain),
-                                items: List.generate(60, (i) => (i + 1).toString()).map((v) => DropdownMenuItem(
-                                  value: v, 
-                                  child: Center(child: Text(v))
-                                )).toList(),
+                                items: () {
+                                  final val = _customDurationController.text.isNotEmpty ? _customDurationController.text : null;
+                                  final list = List.generate(60, (i) => (i + 1).toString()).map((v) => DropdownMenuItem(
+                                    value: v, 
+                                    child: Center(child: Text(v))
+                                  )).toList();
+                                  if (val != null && !list.any((item) => item.value == val)) {
+                                    list.add(DropdownMenuItem(
+                                      value: val,
+                                      child: Center(child: Text(val)),
+                                    ));
+                                  }
+                                  return list;
+                                }(),
                                 onChanged: (v) {
                                   if (v != null) {
                                     setState(() {
@@ -1508,7 +1563,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
     // Dropdown items
     List<DropdownMenuItem<String>> menuItems = doseOptions.map((val) => DropdownMenuItem<String>(
       value: val,
-      child: Text("$val ${med.unit}"),
+      child: Text(val),
     )).toList();
     
     menuItems.add(const DropdownMenuItem<String>(

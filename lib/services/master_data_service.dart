@@ -13,7 +13,7 @@ class MasterDataService {
   List<String> symptoms = [];
   List<String> findings = [];
   List<String> diagnoses = [];
-  List<Map<String, String>> medicines = [];
+  List<Map<String, dynamic>> medicines = [];
   List<String> instructions = [];
   List<String> investigations = [];
   List<String> procedures = [];
@@ -48,13 +48,14 @@ class MasterDataService {
   }
 
   Future<void> _syncMedicines() async {
-    final medResponse = await SupabaseHandler.client.from('opd_medicine').select('medicine_name, type, unit, default_note');
+    final medResponse = await SupabaseHandler.client.from('opd_medicine').select('medicine_name, type, unit, default_note, metadata');
     if (medResponse is List) {
       medicines = medResponse.map((row) => {
         'name': row['medicine_name']?.toString() ?? '',
         'type': row['type']?.toString() ?? '', 
         'unit': row['unit']?.toString() ?? '', 
         'default_note': row['default_note']?.toString() ?? '', 
+        'metadata': row['metadata'],
       }).toList();
       debugPrint("✅ Medicines Synced: ${medicines.length}");
     }
@@ -179,18 +180,25 @@ class MasterDataService {
 
   /// Saves or Updates a medicine in the opd_medicine table.
   /// This ensures that type (TAB/CAP) and unit (mg/ml) preferences are remembered.
-  Future<void> saveMedicine(String name, String type, String unit, {String? defaultNote}) async {
+  Future<void> saveMedicine(
+    String name, 
+    String type, 
+    String unit, {
+    String? defaultNote,
+    Map<String, dynamic>? metadata,
+  }) async {
     try {
       final nameClean = name.trim();
       if (nameClean.isEmpty) return;
 
       // 1. Update local memory cache for instant session parity
       final index = medicines.indexWhere((m) => m['name']?.toLowerCase() == nameClean.toLowerCase());
-      final Map<String, String> updatedMap = {
+      final Map<String, dynamic> updatedMap = {
         'name': nameClean,
         'type': type,
         'unit': unit,
         if (defaultNote != null) 'default_note': defaultNote,
+        if (metadata != null) 'metadata': metadata,
       };
 
       if (index != -1) {
@@ -210,6 +218,7 @@ class MasterDataService {
         'type': type,
         'unit': unit,
         if (defaultNote != null) 'default_note': defaultNote,
+        if (metadata != null) 'metadata': metadata,
       };
 
       if (existing != null) {

@@ -47,18 +47,51 @@ class MasterDataService {
     }
   }
 
-  Future<void> _syncMedicines() async {
-    final medResponse = await SupabaseHandler.client.from('opd_medicine').select('medicine_name, type, unit, default_note, metadata');
-    if (medResponse is List) {
-      medicines = medResponse.map((row) => {
-        'name': row['medicine_name']?.toString() ?? '',
-        'type': row['type']?.toString() ?? '', 
-        'unit': row['unit']?.toString() ?? '', 
-        'default_note': row['default_note']?.toString() ?? '', 
-        'metadata': row['metadata'],
-      }).toList();
-      debugPrint("✅ Medicines Synced: ${medicines.length}");
+  static Map<String, dynamic>? parseMetadata(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is Map) {
+      return Map<String, dynamic>.from(raw);
     }
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          return Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  Future<void> _syncMedicines() async {
+    try {
+      final medResponse = await SupabaseHandler.client
+          .from('opd_medicine')
+          .select('medicine_name, type, unit, default_note, metadata');
+      if (medResponse is List) {
+        medicines = medResponse.map((row) => {
+          'name': row['medicine_name']?.toString() ?? '',
+          'type': row['type']?.toString() ?? '', 
+          'unit': row['unit']?.toString() ?? '', 
+          'default_note': row['default_note']?.toString() ?? '', 
+          'metadata': parseMetadata(row['metadata']),
+        }).toList();
+        debugPrint("✅ Medicines Synced: ${medicines.length}");
+      }
+    } catch (e) {
+      debugPrint("❌ MasterData Sync Error (_syncMedicines): $e");
+    }
+  }
+
+  /// Helper to lookup medicine case-insensitively with trimmed name
+  Map<String, dynamic>? findMedicine(String name) {
+    final clean = name.trim().toLowerCase();
+    if (clean.isEmpty) return null;
+    final idx = medicines.indexWhere(
+      (m) => (m['name']?.toString().trim().toLowerCase() ?? '') == clean,
+    );
+    if (idx != -1) return medicines[idx];
+    return null;
   }
 
   Future<void> _syncDatasets() async {
@@ -179,7 +212,7 @@ class MasterDataService {
   }
 
   /// Saves or Updates a medicine in the opd_medicine table.
-  /// This ensures that type (TAB/CAP) and unit (mg/ml) preferences are remembered.
+  /// This ensures that type, unit, default note, and metadata (dosage, timing, duration) preferences are remembered.
   Future<void> saveMedicine(
     String name, 
     String type, 
@@ -191,14 +224,38 @@ class MasterDataService {
       final nameClean = name.trim();
       if (nameClean.isEmpty) return;
 
-      // 1. Update local memory cache for instant session parity
-      final index = medicines.indexWhere((m) => m['name']?.toLowerCase() == nameClean.toLowerCase());
+      final index = medicines.indexWhere(
+        (m) => (m['name']?.toString().trim().toLowerCase() ?? '') == nameClean.toLowerCase(),
+      );
+
+      // Preserve existing values if not passed
+      String finalType = type;
+      String finalUnit = unit;
+      String? finalNote = defaultNote;
+      Map<String, dynamic>? finalMeta = metadata;
+
+      if (index != -1) {
+        final existingItem = medicines[index];
+        if (finalType.isEmpty && existingItem['type'] != null) {
+          finalType = existingItem['type'].toString();
+        }
+        if (finalUnit.isEmpty && existingItem['unit'] != null) {
+          finalUnit = existingItem['unit'].toString();
+        }
+        if (finalNote == null && existingItem['default_note'] != null) {
+          finalNote = existingItem['default_note'].toString();
+        }
+        if (finalMeta == null && existingItem['metadata'] != null) {
+          finalMeta = parseMetadata(existingItem['metadata']);
+        }
+      }
+
       final Map<String, dynamic> updatedMap = {
         'name': nameClean,
-        'type': type,
-        'unit': unit,
-        if (defaultNote != null) 'default_note': defaultNote,
-        if (metadata != null) 'metadata': metadata,
+        'type': finalType,
+        'unit': finalUnit,
+        if (finalNote != null) 'default_note': finalNote,
+        if (finalMeta != null) 'metadata': finalMeta,
       };
 
       if (index != -1) {
@@ -215,10 +272,10 @@ class MasterDataService {
           .maybeSingle();
 
       final Map<String, dynamic> updateFields = {
-        'type': type,
-        'unit': unit,
-        if (defaultNote != null) 'default_note': defaultNote,
-        if (metadata != null) 'metadata': metadata,
+        'type': finalType,
+        'unit': finalUnit,
+        if (finalNote != null) 'default_note': finalNote,
+        if (finalMeta != null) 'metadata': finalMeta,
       };
 
       if (existing != null) {

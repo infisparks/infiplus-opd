@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 import '../../main.dart';
 import '../services/server_data_service.dart';
 import 'doctor/doctor_create.dart';
@@ -176,10 +177,11 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
       }
 
       // 2. Call PDF Generator
+      final visitDate = _cloudData['created_at'] != null ? DateTime.parse(_cloudData['created_at']).toLocal() : DateTime.now();
       return await ReportPdfGenerator.generatePdf(
         patient: widget.patient,
         opdId: widget.opdId,
-        date: DateTime.now(),
+        date: visitDate,
         config: {'margin_top': _marginTop, 'margin_bottom': _marginBottom, 'toggles': _printSettings},
         symptomsText: symText,
         diagnosisText: diagText,
@@ -192,7 +194,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         proceduresText: (procList)?.join(", ") ?? "",
         fitnessPlans: fDisplay,
         notesText: _clinicalNoteController.text,
-        followUpText: _selectedFollowUp.isNotEmpty ? "Next Review: After $_selectedFollowUp" : "",
+        followUpText: _formatFollowUpText(visitDate),
         referDoctorText: _selectedReferDoctor != null ? "Ref: Dr. ${_selectedReferDoctor!['name']}" : "",
         bloodResults: bResults,
       );
@@ -728,10 +730,11 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
       'toggles': _printSettings
     };
 
+    final visitDate = _cloudData['created_at'] != null ? DateTime.parse(_cloudData['created_at']).toLocal() : DateTime.now();
     return PreviewPdfComponent(
       patient: widget.patient,
       opdId: widget.opdId,
-      date: DateTime.now(),
+      date: visitDate,
       config: config,
       symptomsText: symText,
       diagnosisText: diagText,
@@ -744,10 +747,27 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
       proceduresText: procText,
       fitnessPlans: fitnessDisplay,
       notesText: noteStr,
-      followUpText: _selectedFollowUp.isNotEmpty ? "Next Review: After $_selectedFollowUp" : "",
+      followUpText: _formatFollowUpText(visitDate),
       referDoctorText: _selectedReferDoctor != null ? "Ref: Dr. ${_selectedReferDoctor!['name']}" : "",
       bloodResults: bloodResults,
     );
+  }
+
+  String _formatFollowUpText(DateTime visitDate) {
+    if (_selectedFollowUp.isEmpty) return "";
+    final reviewDate = _calculateNextReview(visitDate);
+    final note = _followUpNoteController.text.trim();
+    if (reviewDate != null) {
+      final formattedDate = DateFormat('dd MMM yyyy').format(reviewDate);
+      if (note.isNotEmpty) {
+        return "Next Review: $formattedDate ($note)";
+      }
+      return "Next Review: $formattedDate";
+    }
+    if (note.isNotEmpty) {
+      return "Next Review: $_selectedFollowUp ($note)";
+    }
+    return "Next Review: $_selectedFollowUp";
   }
 
   // --- 3. SUBMIT TO SUPABASE ---
@@ -761,7 +781,8 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
       await ServerDataService.saveData(opdId, 'clinical_notes', finalClinicalNote);
       await ServerDataService.saveData(opdId, 'private_note', _privateNoteController.text);
 
-      DateTime? nextReviewDate = _calculateNextReview();
+      final visitDate = _cloudData['created_at'] != null ? DateTime.parse(_cloudData['created_at']).toLocal() : widget.patient.visitDate;
+      DateTime? nextReviewDate = _calculateNextReview(visitDate);
 
       Map<String, dynamic> existingClinicalData = (_cloudData['clinical_data'] as Map<String, dynamic>?) ?? {};
       existingClinicalData['print_settings'] = _printSettings;
@@ -802,15 +823,37 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
     }
   }
 
-  DateTime? _calculateNextReview() {
+  DateTime? _calculateNextReview([DateTime? baseDate]) {
     if (_selectedFollowUp.isEmpty) return null;
-    final now = DateTime.now();
+    final base = baseDate ?? (_cloudData['created_at'] != null 
+        ? DateTime.parse(_cloudData['created_at']).toLocal() 
+        : widget.patient.visitDate);
     try {
-      if (_selectedFollowUp.contains("d")) return now.add(Duration(days: int.parse(_selectedFollowUp.replaceAll("d", ""))));
-      if (_selectedFollowUp.contains("w")) return now.add(Duration(days: int.parse(_selectedFollowUp.replaceAll("w", "")) * 7));
-      if (_selectedFollowUp.contains("m")) return now.add(Duration(days: int.parse(_selectedFollowUp.replaceAll("m", "")) * 30));
-      if (_selectedFollowUp.contains("y")) return now.add(Duration(days: int.parse(_selectedFollowUp.replaceAll("y", "")) * 365));
+      final str = _selectedFollowUp.trim().toLowerCase();
+      if (str.endsWith("d")) {
+        final days = int.parse(str.replaceAll("d", ""));
+        return base.add(Duration(days: days));
+      } else if (str.endsWith("w")) {
+        final weeks = int.parse(str.replaceAll("w", ""));
+        return base.add(Duration(days: weeks * 7));
+      } else if (str.endsWith("m")) {
+        final months = int.parse(str.replaceAll("m", ""));
+        int year = base.year;
+        int month = base.month + months;
+        year += (month - 1) ~/ 12;
+        month = ((month - 1) % 12) + 1;
+        int lastDayOfTargetMonth = DateTime(year, month + 1, 0).day;
+        int day = base.day > lastDayOfTargetMonth ? lastDayOfTargetMonth : base.day;
+        return DateTime(year, month, day, base.hour, base.minute);
+      } else if (str.endsWith("y")) {
+        final years = int.parse(str.replaceAll("y", ""));
+        int year = base.year + years;
+        int lastDayOfTargetMonth = DateTime(year, base.month + 1, 0).day;
+        int day = base.day > lastDayOfTargetMonth ? lastDayOfTargetMonth : base.day;
+        return DateTime(year, base.month, day, base.hour, base.minute);
+      }
     } catch (e) {
+      debugPrint("Error calculating next review: $e");
       return null;
     }
     return null;
@@ -826,7 +869,8 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
       await ServerDataService.saveData(opdId, 'clinical_notes', finalClinicalNote);
       await ServerDataService.saveData(opdId, 'private_note', _privateNoteController.text);
 
-      DateTime? nextReviewDate = _calculateNextReview();
+      final visitDate = _cloudData['created_at'] != null ? DateTime.parse(_cloudData['created_at']).toLocal() : widget.patient.visitDate;
+      DateTime? nextReviewDate = _calculateNextReview(visitDate);
 
       Map<String, dynamic> existingClinicalData = (_cloudData['clinical_data'] as Map<String, dynamic>?) ?? {};
       existingClinicalData['print_settings'] = _printSettings;
@@ -1143,7 +1187,10 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(color: PreviewTheme.primary, borderRadius: BorderRadius.circular(4)),
-                                  child: Text(_selectedFollowUp, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                                  child: Text(
+                                    _calculateNextReview() != null ? DateFormat('dd MMM yyyy').format(_calculateNextReview()!) : _selectedFollowUp,
+                                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                                  ),
                                 ),
                             ],
                           ),
@@ -1151,9 +1198,35 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
                       ],
 
                       if (_selectedFollowUp.isNotEmpty) ...[
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: PreviewTheme.primary.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: PreviewTheme.primary.withValues(alpha: 0.2)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.event_available_rounded, size: 14, color: PreviewTheme.primary),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  "Next Review: ${_calculateNextReview() != null ? DateFormat('dd MMM yyyy (EEEE)').format(_calculateNextReview()!) : _selectedFollowUp}",
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: PreviewTheme.primary,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
                         TextField(
                           controller: _followUpNoteController,
+                          onChanged: (val) => setState(() {}),
                           style: const TextStyle(fontSize: 13),
                           decoration: InputDecoration(hintText: "Follow-up specific note...", isDense: true, filled: true, fillColor: Colors.grey[50], border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: PreviewTheme.border))),
                         ),

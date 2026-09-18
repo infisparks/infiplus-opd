@@ -198,34 +198,67 @@ class OpdPdfComponent extends StatelessWidget {
 
                 // Footer Box
                 if (selectedFollowUp.isNotEmpty || referDoctorName != null)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                        border: Border.all(color: Colors.black12),
-                        borderRadius: BorderRadius.circular(4)),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        if (selectedFollowUp.isNotEmpty)
-                          RichText(
-                              text: TextSpan(
-                                  style: const TextStyle(color: Colors.black, fontSize: 12),
-                                  children: [
-                                    const TextSpan(text: "Next Review: ", style: TextStyle(fontWeight: FontWeight.bold)),
-                                    TextSpan(text: "After $selectedFollowUp ", style: const TextStyle(fontWeight: FontWeight.bold, color: PdfTheme.primary)),
-                                    if (followUpNote.isNotEmpty)
-                                      TextSpan(text: "($followUpNote)", style: const TextStyle(fontStyle: FontStyle.italic, fontSize: 11)),
-                                  ])),
-                        if (referDoctorName != null)
-                          RichText(
-                              text: TextSpan(
-                                  style: const TextStyle(color: Colors.black, fontSize: 12),
-                                  children: [
-                                    const TextSpan(text: "Referred To: ", style: TextStyle(fontWeight: FontWeight.bold)),
-                                    TextSpan(text: "Dr. $referDoctorName"),
-                                  ])),
-                      ],
-                    ),
+                  Builder(
+                    builder: (context) {
+                      DateTime? reviewDate;
+                      try {
+                        final str = selectedFollowUp.trim().toLowerCase();
+                        if (str.endsWith("d")) {
+                          reviewDate = date.add(Duration(days: int.parse(str.replaceAll("d", ""))));
+                        } else if (str.endsWith("w")) {
+                          reviewDate = date.add(Duration(days: int.parse(str.replaceAll("w", "")) * 7));
+                        } else if (str.endsWith("m")) {
+                          final months = int.parse(str.replaceAll("m", ""));
+                          int year = date.year;
+                          int month = date.month + months;
+                          year += (month - 1) ~/ 12;
+                          month = ((month - 1) % 12) + 1;
+                          int lastDay = DateTime(year, month + 1, 0).day;
+                          int day = date.day > lastDay ? lastDay : date.day;
+                          reviewDate = DateTime(year, month, day, date.hour, date.minute);
+                        } else if (str.endsWith("y")) {
+                          final years = int.parse(str.replaceAll("y", ""));
+                          int year = date.year + years;
+                          int lastDay = DateTime(year, date.month + 1, 0).day;
+                          int day = date.day > lastDay ? lastDay : date.day;
+                          reviewDate = DateTime(year, date.month, day, date.hour, date.minute);
+                        }
+                      } catch (_) {}
+
+                      final followUpDisplay = reviewDate != null 
+                          ? DateFormat('dd MMM yyyy').format(reviewDate)
+                          : selectedFollowUp;
+
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                            border: Border.all(color: Colors.black12),
+                            borderRadius: BorderRadius.circular(4)),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            if (selectedFollowUp.isNotEmpty)
+                              RichText(
+                                  text: TextSpan(
+                                      style: const TextStyle(color: Colors.black, fontSize: 12),
+                                      children: [
+                                        const TextSpan(text: "Next Review: ", style: TextStyle(fontWeight: FontWeight.bold)),
+                                        TextSpan(text: "$followUpDisplay ", style: const TextStyle(fontWeight: FontWeight.bold, color: PdfTheme.primary)),
+                                        if (followUpNote.isNotEmpty)
+                                          TextSpan(text: "($followUpNote)", style: const TextStyle(fontStyle: FontStyle.italic, fontSize: 11)),
+                                      ])),
+                            if (referDoctorName != null)
+                              RichText(
+                                  text: TextSpan(
+                                      style: const TextStyle(color: Colors.black, fontSize: 12),
+                                      children: [
+                                        const TextSpan(text: "Referred To: ", style: TextStyle(fontWeight: FontWeight.bold)),
+                                        TextSpan(text: "Dr. $referDoctorName"),
+                                      ])),
+                          ],
+                        ),
+                      );
+                    },
                   ),
 
                 if (printSettings["Signature"] == true)
@@ -252,6 +285,7 @@ class OpdPdfComponent extends StatelessWidget {
 
   Widget _buildCompactHeader() {
     final formattedDate = DateFormat('dd/MM/yyyy').format(date);
+    final formattedTime = DateFormat('hh:mm a').format(date);
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -297,6 +331,8 @@ class OpdPdfComponent extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text("Date: $formattedDate", style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+              const SizedBox(height: 2),
+              Text("Time: $formattedTime", style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 11, color: Colors.black87)),
               if (referDoctorName != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),

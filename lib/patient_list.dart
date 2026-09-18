@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'main.dart'; // Patient class + AppColors
 import 'supabase_handler.dart';
+import 'manage_patient/clinical_analytics_page.dart';
 
 
 // ─────────────────────────────────────────────────────────────────
@@ -40,6 +42,7 @@ class LeftPanelPatientList extends StatefulWidget {
 class _LeftPanelPatientListState extends State<LeftPanelPatientList>
     with SingleTickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
+  Timer? _searchDebounce;
 
   List<Patient> _visiblePatients    = [];
   DateFilter    _currentFilter      = DateFilter.today;
@@ -64,6 +67,7 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -78,19 +82,22 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
     List<Patient> result = [];
 
     if (_currentFilter == DateFilter.all) {
-      // Lowered limit to 2 characters to be more flexible
-      result = query.length < 2
-          ? []
-          : widget.patients.where((p) {
-              final matchesHospital = _selectedHospital == "All Hospitals" || p.hospitalName == _selectedHospital;
-              if (!matchesHospital) return false;
-              
-              final matchesName  = p.name.toLowerCase().contains(query);
-              final matchesPhone = p.phone.contains(query);
-              final matchesId    = p.id.toLowerCase().contains(query);
-              
-              return matchesName || matchesPhone || matchesId;
-            }).toList();
+      if (!_hasSearchedAllMode) {
+        setState(() => _visiblePatients = []);
+        return;
+      }
+      result = widget.patients.where((p) {
+        final matchesHospital = _selectedHospital == "All Hospitals" || p.hospitalName == _selectedHospital;
+        if (!matchesHospital) return false;
+        if (query.isEmpty) return true;
+        
+        final matchesName  = p.name.toLowerCase().contains(query);
+        final matchesPhone = p.phone.toLowerCase().contains(query);
+        final matchesId    = p.id.toLowerCase().contains(query);
+        final matchesAddr  = p.address.toLowerCase().contains(query);
+        
+        return matchesName || matchesPhone || matchesId || matchesAddr;
+      }).toList();
     } else {
       result = widget.patients.where((p) {
         final matchesHospital = _selectedHospital == "All Hospitals" || p.hospitalName == _selectedHospital;
@@ -103,8 +110,9 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
         if (!dateOk) return false;
         if (query.isEmpty) return true;
         return p.name.toLowerCase().contains(query) ||
-               p.phone.contains(query) ||
-               p.id.toLowerCase().contains(query);
+               p.phone.toLowerCase().contains(query) ||
+               p.id.toLowerCase().contains(query) ||
+               p.address.toLowerCase().contains(query);
       }).toList();
     }
 
@@ -125,32 +133,62 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
   }
 
   void _onTabChanged(DateFilter newFilter) {
+    _searchDebounce?.cancel();
     setState(() {
       _currentFilter      = newFilter;
       _hasSearchedAllMode = false;
       _visiblePatients    = [];
     });
     _searchController.clear();
-    if (newFilter != DateFilter.all) _applyFilters();
+    _applyFilters();
   }
 
-  void _onSearchTriggered() async {
-    final query = _searchController.text.trim();
-    if (_currentFilter == DateFilter.all && query.length < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Enter at least 2 characters to search.")),
-      );
-      return;
+  void _onSearchChanged(String value) {
+    if (_currentFilter != DateFilter.all) {
+      _applyFilters();
+    } else {
+      if (value.trim().isEmpty) {
+        setState(() {
+          _hasSearchedAllMode = false;
+          _visiblePatients    = [];
+        });
+      } else {
+        setState(() {});
+      }
     }
+  }
+
+  Future<void> _onSearchTriggered() async {
+    _searchDebounce?.cancel();
+    final query = _searchController.text.trim();
     
     if (_currentFilter == DateFilter.all) {
-      setState(() => _isRefreshing = true);
-      await widget.onRefresh(searchQuery: query);
-      if (mounted) setState(() => _isRefreshing = false);
+      if (query.isEmpty) {
+        setState(() {
+          _hasSearchedAllMode = false;
+          _visiblePatients    = [];
+        });
+        return;
+      }
+
+      setState(() {
+        _hasSearchedAllMode = true;
+        _isRefreshing       = true;
+      });
+
+      try {
+        await widget.onRefresh(searchQuery: query);
+      } catch (e) {
+        debugPrint("Error during search: $e");
+      } finally {
+        if (mounted) {
+          setState(() => _isRefreshing = false);
+          _applyFilters();
+        }
+      }
+    } else {
+      _applyFilters();
     }
-    
-    setState(() => _hasSearchedAllMode = true);
-    _applyFilters();
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -183,8 +221,14 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
 
   // ── Hospital Filter ──────────────────────────────────────────
   Widget _buildHospitalFilter() {
-    final hospitals = widget.patients.map((p) => p.hospitalName).where((h) => h.isNotEmpty).toSet().toList();
-    hospitals.sort();
+    final Set<String> hospitalSet = {
+      "Cigma Clinic",
+      "Rehmania Hospital",
+      "Jeevdani Hospital",
+      "Dausup Hospital",
+    };
+    hospitalSet.addAll(widget.patients.map((p) => p.hospitalName).where((h) => h.isNotEmpty));
+    final hospitals = hospitalSet.toList()..sort();
     
     return Container(
       width: double.infinity,
@@ -213,6 +257,46 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
                     _applyFilters();
                   }
                 },
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Tooltip(
+            message: "Clinical Data Analytics & Settings",
+            child: InkWell(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ClinicalAnalyticsPage(
+                      initialHospital: _selectedHospital,
+                    ),
+                  ),
+                );
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.insights_rounded, size: 14, color: AppColors.primary),
+                    const SizedBox(width: 4),
+                    Text(
+                      "Analytics",
+                      style: GoogleFonts.poppins(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -319,6 +403,8 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
 
   // ── Search Bar ────────────────────────────────────────────────
   Widget _buildSearchBar() {
+    final queryNotEmpty = _searchController.text.isNotEmpty;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
       child: Container(
@@ -332,25 +418,25 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
         child: TextField(
           controller: _searchController,
           onSubmitted: (_) => _onSearchTriggered(),
-          onChanged:   (v) { if (_currentFilter != DateFilter.all) _applyFilters(); },
+          onChanged:   _onSearchChanged,
           style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textPrimary),
           decoration: InputDecoration(
-            hintText:      _currentFilter == DateFilter.all ? "Search name / ID / phone (min 2 chars)…" : "Filter list…",
+            hintText:      _currentFilter == DateFilter.all ? "Search name / ID / phone / address…" : "Filter list…",
             hintStyle:     GoogleFonts.poppins(fontSize: 12, color: AppColors.textMuted),
             prefixIcon:    const Icon(Icons.search_rounded, size: 20, color: AppColors.textMuted),
             border:        InputBorder.none,
             enabledBorder: InputBorder.none,
             focusedBorder: InputBorder.none,
-            contentPadding: const EdgeInsets.symmetric(vertical: 12),
-            isDense: true,
-            suffixIcon: SizedBox(
-              width: 82,
+            suffixIcon: Padding(
+              padding: const EdgeInsets.only(right: 6),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   if (_visiblePatients.isNotEmpty)
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                      margin: const EdgeInsets.only(right: 4),
                       decoration: BoxDecoration(
                         color: AppColors.accentLight,
                         borderRadius: BorderRadius.circular(10),
@@ -362,13 +448,29 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
                         ),
                       ),
                     ),
+                  if (queryNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 18, color: AppColors.textMuted),
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      constraints: const BoxConstraints(),
+                      tooltip: "Clear search",
+                      onPressed: () {
+                        _searchController.clear();
+                        _onSearchChanged("");
+                        if (_currentFilter == DateFilter.all) {
+                          _onSearchTriggered();
+                        }
+                      },
+                    ),
                   IconButton(
-                    icon: const Icon(Icons.arrow_forward_rounded, size: 18, color: AppColors.primary),
-                    padding: EdgeInsets.zero,
+                    icon: _isRefreshing
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary))
+                        : const Icon(Icons.arrow_forward_rounded, size: 18, color: AppColors.primary),
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
                     constraints: const BoxConstraints(),
-                    onPressed: _onSearchTriggered,
+                    tooltip: "Search records",
+                    onPressed: _isRefreshing ? null : _onSearchTriggered,
                   ),
-                  const SizedBox(width: 8),
                 ],
               ),
             ),
@@ -380,17 +482,31 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
 
   // ── List Content ──────────────────────────────────────────────
   Widget _buildListContent() {
+    if (_isRefreshing && _visiblePatients.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(color: AppColors.primary, strokeWidth: 2.5),
+            const SizedBox(height: 12),
+            Text("Searching records…", style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textSecondary)),
+          ],
+        ),
+      );
+    }
     if (_currentFilter == DateFilter.all && !_hasSearchedAllMode) {
       return _emptyState(Icons.manage_search_outlined, "Search All Records",
-          "Enter name or UHID to find\nolder patient files.");
+          "Enter patient name, phone, or UHID\nand click Search to load data.");
     }
     if (_visiblePatients.isEmpty) {
       return _emptyState(Icons.filter_list_off_outlined, "No Patients Found",
-          "Try adjusting the filter\nor your search query.");
+          _currentFilter == DateFilter.all
+              ? "No records matched your search query.\nTry searching by name or phone."
+              : "Try adjusting the filter\nor your search query.");
     }
 
     return RefreshIndicator(
-      onRefresh: widget.onRefresh,
+      onRefresh: () => widget.onRefresh(searchQuery: _searchController.text.trim().isNotEmpty ? _searchController.text.trim() : null),
       color: AppColors.primary,
       child: ListView.builder(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),

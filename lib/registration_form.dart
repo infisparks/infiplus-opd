@@ -167,10 +167,10 @@ class _RegistrationFormState extends State<RegistrationForm> {
 
     setState(() => _isSearching = true);
     try {
-      // name and uhid are text, so ilike works. 
+      // name, uhid, address are text, so ilike works. 
       // number is bigint, so we use eq for exact numeric match.
       String q = query.trim();
-      String orFilter = 'name.ilike.*$q*,uhid.ilike.*$q*';
+      String orFilter = 'name.ilike.%$q%,uhid.ilike.%$q%,address.ilike.%$q%';
       
       final num = int.tryParse(q);
       if (num != null) {

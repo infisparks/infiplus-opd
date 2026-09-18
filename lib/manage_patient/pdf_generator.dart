@@ -262,7 +262,7 @@ class ReportPdfGenerator {
           height: 50,
         ),
         pw.Expanded(
-          flex: 2,
+          flex: 3,
           child: pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.end,
             children: [
@@ -273,6 +273,8 @@ class ReportPdfGenerator {
               ),
               pw.SizedBox(height: 4),
               pw.Text("Date: ${DateFormat('dd/MM/yyyy').format(date)}", style: pw.TextStyle(font: fontBold, fontSize: 10)),
+              pw.SizedBox(height: 2),
+              pw.Text("Time: ${DateFormat('hh:mm a').format(date)}", style: pw.TextStyle(font: font, fontSize: 9)),
             ],
           ),
         ),

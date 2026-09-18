@@ -335,12 +335,14 @@ class PreviewPdfComponent extends StatelessWidget {
         ),
         QrImageView(data: opdId.toString(), size: 50.0),
         Expanded(
-          flex: 2,
+          flex: 3,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text("OPD ID: #$opdId", style: GoogleFonts.poppins(fontWeight: FontWeight.w900, fontSize: 11)),
+              const SizedBox(height: 2),
               Text("Date: ${DateFormat('dd/MM/yyyy').format(date)}", style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 10)),
+              Text("Time: ${DateFormat('hh:mm a').format(date)}", style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 9, color: Colors.black87)),
             ],
           ),
         ),

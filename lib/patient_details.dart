@@ -15,6 +15,10 @@ import 'package:infiplus_opd/manage_patient/canvas_management_page.dart';
 // ─────────────────────────────────────────────────────────────────
 class RightPanelPatientDetails extends StatefulWidget {
   final Patient patient;
+
+  /// Software version displayed in the top header. Update this value with each release.
+  static const String appVersion = "v4.12";
+
   const RightPanelPatientDetails({super.key, required this.patient});
 
   @override
@@ -179,7 +183,7 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
     String visitType = "New Patient";
     if (visit.isNotEmpty && visit['created_at'] != null) {
       final date = DateTime.parse(visit['created_at']).toLocal();
-      dateStr   = DateFormat('MMM d, yyyy').format(date);
+      dateStr   = "${DateFormat('MMM d, yyyy').format(date)} • ${DateFormat('hh:mm a').format(date)}";
       visitType = visit['visit_category'] ?? "Follow Up";
     }
 
@@ -250,35 +254,75 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
             ),
           ),
 
-          // Visit card
-          if (visit.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-              decoration: BoxDecoration(
-                color:        AppColors.bgBody,
-                borderRadius: BorderRadius.circular(14),
-                border:       Border.all(color: AppColors.border),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text("LAST VISIT",
-                    style: GoogleFonts.poppins(
-                      fontSize: 9, fontWeight: FontWeight.w700,
-                      color: AppColors.textMuted, letterSpacing: 1.4,
+          // Software Version & Visit card
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Version Badge
+              Container(
+                margin: const EdgeInsets.only(right: 14),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: AppColors.success,
+                        shape: BoxShape.circle,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(dateStr,
-                    style: GoogleFonts.poppins(
-                      fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
+                    const SizedBox(width: 6),
+                    Text(
+                      RightPanelPatientDetails.appVersion,
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primaryDark,
+                        letterSpacing: 0.3,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 3),
-                  _visitTypeBadge(visitType),
-                ],
+                  ],
+                ),
               ),
-            ),
+
+              // Visit card
+              if (visit.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                  decoration: BoxDecoration(
+                    color:        AppColors.bgBody,
+                    borderRadius: BorderRadius.circular(14),
+                    border:       Border.all(color: AppColors.border),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text("LAST VISIT",
+                        style: GoogleFonts.poppins(
+                          fontSize: 9, fontWeight: FontWeight.w700,
+                          color: AppColors.textMuted, letterSpacing: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(dateStr,
+                        style: GoogleFonts.poppins(
+                          fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      _visitTypeBadge(visitType),
+                    ],
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -629,30 +673,86 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
     List<dynamic> rawRx   = visitData['opd_reg_rx'] ?? [];
     List<Map<String, String>> rxDisplay = rawRx.map<Map<String, String>>((item) {
       String freq = "0-0-0";
-      if (item['timing_json'] is Map) {
-        var t = item['timing_json'];
+      final timingData = item['timing_json'] ?? item['timing'];
+      if (timingData is Map) {
         String getVal(dynamic val) {
           if (val == null) return "0";
           if (val is bool) return val ? "1" : "0";
           final s = val.toString().trim();
           return s.isEmpty ? "0" : s;
         }
-        String bb = getVal(t['bb']);
-        String ab = getVal(t['ab']);
-        String bl = getVal(t['bl']);
-        String al = getVal(t['al']);
-        String bd = getVal(t['bd']);
-        String ad = getVal(t['ad']);
+        String bb = getVal(timingData['bb']);
+        String ab = getVal(timingData['ab']);
+        String bl = getVal(timingData['bl']);
+        String al = getVal(timingData['al']);
+        String bd = getVal(timingData['bd']);
+        String ad = getVal(timingData['ad']);
         
         String m = bb != "0" ? bb : ab;
         String a = bl != "0" ? bl : al;
         String n = bd != "0" ? bd : ad;
         freq = "$m-$a-$n";
+      } else if (item['freq'] != null) {
+        freq = item['freq'].toString().trim();
       }
+
+      String name   = (item['medicine_name'] ?? item['name'] ?? '').toString().trim();
+      String type   = (item['medicine_type'] ?? item['type'] ?? '').toString().trim();
+      String dosage = (item['dosage'] ?? '').toString().trim();
+      String unit   = (item['unit'] ?? '').toString().trim();
+      String note   = (item['note'] ?? '').toString().trim();
+
+      String doseUnit = "";
+      if (dosage.isNotEmpty && unit.isNotEmpty) {
+        if (dosage.toLowerCase().endsWith(unit.toLowerCase())) {
+          doseUnit = dosage;
+        } else {
+          doseUnit = "$dosage $unit";
+        }
+      } else if (dosage.isNotEmpty) {
+        doseUnit = dosage;
+      } else if (unit.isNotEmpty) {
+        doseUnit = unit;
+      }
+
+      List<String> parts = [];
+      if (type.isNotEmpty && type.toLowerCase() != 'allopathy') {
+        parts.add(type.toUpperCase());
+      }
+      if (name.isNotEmpty) {
+        parts.add(name);
+      }
+      if (doseUnit.isNotEmpty) {
+        parts.add(doseUnit);
+      }
+      String fullMedName = parts.join(' ').trim();
+      if (fullMedName.isEmpty) fullMedName = name.isNotEmpty ? name : "Medicine";
+
+      // Automated timing instructions
+      List<String> instParts = [];
+      if (timingData is Map) {
+        bool isActive(dynamic val) {
+          if (val == null) return false;
+          if (val is bool) return val;
+          final s = val.toString().trim();
+          return s.isNotEmpty && s != "0";
+        }
+        if (isActive(timingData['bb'])) instParts.add("Before Breakfast");
+        if (isActive(timingData['ab'])) instParts.add("After Breakfast");
+        if (isActive(timingData['bl'])) instParts.add("Before Lunch");
+        if (isActive(timingData['al'])) instParts.add("After Lunch");
+        if (isActive(timingData['bd'])) instParts.add("Before Dinner");
+        if (isActive(timingData['ad'])) instParts.add("After Dinner");
+      }
+      if (note.isNotEmpty) {
+        instParts.add(note);
+      }
+
       return {
-        "name": "${item['medicine_name']} ${item['dosage'] ?? ''}",
+        "name": fullMedName,
+        "note": instParts.join(", "),
         "freq": freq,
-        "dur":  item['duration'] ?? '',
+        "dur":  (item['duration'] ?? '').toString().trim(),
       };
     }).toList();
 
@@ -679,7 +779,7 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
                     const SizedBox(height: 6),
                     Text(widget.patient.name,
                       style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 20, color: Colors.black87)),
-                    Text(DateFormat('dd MMMM yyyy').format(date),
+                    Text("${DateFormat('dd MMMM yyyy').format(date)}  •  ${DateFormat('hh:mm a').format(date)}",
                       style: GoogleFonts.poppins(fontSize: 12, color: Colors.black54)),
                   ],
                 ),
@@ -729,7 +829,7 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
                 ...rxDisplay.asMap().entries.map((e) => TableRow(
                   children: [
                     _paperCell("${e.key + 1}."),
-                    _paperCell(e.value['name']!, bold: true),
+                    _paperMedCell(e.value['name']!, note: e.value['note']),
                     _paperCell(e.value['freq']!),
                     _paperCell(e.value['dur']!),
                   ],
@@ -773,6 +873,34 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
             style: GoogleFonts.poppins(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.grey.shade400, letterSpacing: 0.8)),
           const SizedBox(height: 2),
           Text(content, style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w500, height: 1.45, color: Colors.black87)),
+        ],
+      ),
+    );
+  }
+
+  Widget _paperMedCell(String name, {String? note}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(name,
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          if (note != null && note.trim().isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(note.trim(),
+              style: GoogleFonts.poppins(
+                fontSize: 9,
+                color: AppColors.textMuted,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
         ],
       ),
     );

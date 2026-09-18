@@ -18,6 +18,7 @@ import 'notes_dialog.dart';
 import 'patient_medical_history_page.dart';
 import '../services/server_data_service.dart';
 import 'canvas_management_page.dart';
+import 'edit_patient_dialog.dart';
 
 class NewConsultPage extends StatefulWidget {
   final Patient patient;
@@ -37,13 +38,21 @@ class _NewConsultPageState extends State<NewConsultPage> {
   // Tab order: 0 History | 1 Test | 2 Vitals | 3 Symptoms | 4 Diagnosis | 5 Rx | 6 Report | 7 Print
   int _currentTabIndex = 5; // Default to Rx
   late PageController _pageController;
+  late Patient _patient;
   final GlobalKey<PreviewTabState> _previewKey = GlobalKey<PreviewTabState>();
 
   @override
   void initState() {
     super.initState();
+    _patient = widget.patient;
     _pageController = PageController(initialPage: _currentTabIndex);
     
+    // Auto-pick symptoms, diagnosis & instructions from 1-back report if available
+    ServerDataService.autoPickFromPreviousVisit(
+      uhid: widget.patient.id,
+      currentOpdId: widget.opdId,
+    );
+
     // FETCH FRESH DATA FROM SERVER (Wait for frame to avoid build loops)
     WidgetsBinding.instance.addPostFrameCallback((_) {
        ServerDataService.refreshNotifier.value++;
@@ -51,9 +60,38 @@ class _NewConsultPageState extends State<NewConsultPage> {
   }
 
   @override
+  void didUpdateWidget(covariant NewConsultPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.patient != oldWidget.patient) {
+      _patient = widget.patient;
+    }
+  }
+
+  @override
   void dispose() {
     _pageController.dispose();
     super.dispose();
+  }
+
+  Future<void> _openEditPatientDialog() async {
+    final updated = await showDialog<Patient>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => EditPatientDialog(patient: _patient),
+    );
+
+    if (updated != null && mounted) {
+      setState(() {
+        _patient = updated;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Patient details updated successfully!"),
+          backgroundColor: AppColors.success,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   void _onTabTapped(int index) {
@@ -93,24 +131,63 @@ class _NewConsultPageState extends State<NewConsultPage> {
         ),
         title: Row(
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(widget.patient.name, 
-                  style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                Text("${widget.patient.gender} · ${widget.patient.ageInfo}", 
-                  style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
-              ],
+            // Clickable Patient Name & Info Card
+            Tooltip(
+              message: "Click to edit patient name, age & gender",
+              child: InkWell(
+                onTap: _openEditPatientDialog,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _patient.name, 
+                                style: GoogleFonts.poppins(
+                                  fontSize: 16, 
+                                  fontWeight: FontWeight.w600, 
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              const Icon(
+                                Icons.edit_rounded, 
+                                size: 14, 
+                                color: AppColors.primary,
+                              ),
+                            ],
+                          ),
+                          Text(
+                            "${_patient.gender} · ${_patient.ageInfo}", 
+                            style: GoogleFonts.poppins(
+                              fontSize: 12, 
+                              color: AppColors.textSecondary, 
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
-            const SizedBox(width: 20),
+            const SizedBox(width: 16),
             _topNavItem(Icons.auto_stories_rounded, "HISTORY", 0),
             const SizedBox(width: 8),
             _topNavItem(Icons.biotech_rounded,      "TEST",    1),
             const SizedBox(width: 12),
-            if (widget.patient.isFinalized)
+            if (_patient.isFinalized)
               _statusPill("FINAL", AppColors.success)
-            else if (widget.patient.visitStatus.toLowerCase() == 'checked out')
+            else if (_patient.visitStatus.toLowerCase() == 'checked out')
               _statusPill("CH-OUT", Colors.orange)
             else
               _statusPill("WAIT", AppColors.danger),
@@ -170,8 +247,8 @@ class _NewConsultPageState extends State<NewConsultPage> {
                 MaterialPageRoute(
                   builder: (context) => CanvasManagementPage(
                     opdId: widget.opdId,
-                    uhid: widget.patient.id,
-                    patientName: widget.patient.name,
+                    uhid: _patient.id,
+                    patientName: _patient.name,
                   ),
                 ),
               );
@@ -198,14 +275,14 @@ class _NewConsultPageState extends State<NewConsultPage> {
         controller: _pageController,
         physics:    const NeverScrollableScrollPhysics(),
         children: [
-          HistoryTab(patient: widget.patient, currentOpdId: widget.opdId),   // 0
-          BloodTestTab(patient: widget.patient, opdId: widget.opdId),       // 1
-          VitalsTab(patient: widget.patient, opdId: widget.opdId),          // 2
-          SymptomsTab(patient: widget.patient, opdId: widget.opdId),        // 3
-          DiagnosisTab(patient: widget.patient, opdId: widget.opdId),       // 4
-          TreatmentTab(patient: widget.patient, opdId: widget.opdId),       // 5
-          InstructionsTab(patient: widget.patient, opdId: widget.opdId),    // 6
-          PreviewTab(patient: widget.patient, opdId: widget.opdId, key: _previewKey),         // 7
+          HistoryTab(patient: _patient, currentOpdId: widget.opdId),   // 0
+          BloodTestTab(patient: _patient, opdId: widget.opdId),       // 1
+          VitalsTab(patient: _patient, opdId: widget.opdId),          // 2
+          SymptomsTab(patient: _patient, opdId: widget.opdId),        // 3
+          DiagnosisTab(patient: _patient, opdId: widget.opdId),       // 4
+          TreatmentTab(patient: _patient, opdId: widget.opdId),       // 5
+          InstructionsTab(patient: _patient, opdId: widget.opdId),    // 6
+          PreviewTab(patient: _patient, opdId: widget.opdId, key: _previewKey),         // 7
         ],
       ),
 

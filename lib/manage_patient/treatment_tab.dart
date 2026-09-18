@@ -39,6 +39,21 @@ class TimingSchedule {
     this.afterDinner = "0",
   });
 
+  bool hasActiveSlots() {
+    return beforeBreakfast != "0" || afterBreakfast != "0" ||
+           beforeLunch != "0" || afterLunch != "0" ||
+           beforeDinner != "0" || afterDinner != "0";
+  }
+
+  void updateActiveDosage(String newDosage) {
+    if (beforeBreakfast != "0") beforeBreakfast = newDosage;
+    if (afterBreakfast != "0") afterBreakfast = newDosage;
+    if (beforeLunch != "0") beforeLunch = newDosage;
+    if (afterLunch != "0") afterLunch = newDosage;
+    if (beforeDinner != "0") beforeDinner = newDosage;
+    if (afterDinner != "0") afterDinner = newDosage;
+  }
+
   Map<String, dynamic> toJson() => {
     'bb': beforeBreakfast, 'ab': afterBreakfast,
     'bl': beforeLunch, 'al': afterLunch,
@@ -307,6 +322,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
             id: "${DateTime.now().millisecondsSinceEpoch}_${i}_${oldMed.name.hashCode}",
             name: oldMed.name,
             type: oldMed.type,
+            unit: oldMed.unit,
             dosage: oldMed.dosage,
             duration: oldMed.duration,
             note: oldMed.note,
@@ -368,66 +384,89 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
     }
   }
 
+  void _saveCurrentMedicineMaster() {
+    if (_selectedMedicine != null) {
+      MasterDataService().saveMedicine(
+        _selectedMedicine!.name,
+        _selectedMedicine!.type,
+        _selectedMedicine!.unit,
+        defaultNote: _selectedMedicine!.note,
+        metadata: {
+          'dosage': _selectedMedicine!.dosage,
+          'duration': _selectedMedicine!.duration,
+          'timing': _selectedMedicine!.timing.toJson(),
+        },
+      );
+      _medicineMasterList = MasterDataService().medicines;
+    }
+  }
+
   void _autoSave() {
     final jsonList = _currentPrescription.map((e) => e.toJson()).toList();
+
+    _saveCurrentMedicineMaster();
 
     if (_debounce?.isActive ?? false) _debounce!.cancel();
     _debounce = Timer(const Duration(milliseconds: 500), () {
       ServerDataService.saveData(widget.opdId, 'treatment_data', jsonList, silent: true);
-      if (_selectedMedicine != null) {
-        MasterDataService().saveMedicine(
-          _selectedMedicine!.name,
-          _selectedMedicine!.type,
-          _selectedMedicine!.unit,
-          defaultNote: _selectedMedicine!.note,
-          metadata: {
-            'dosage': _selectedMedicine!.dosage,
-            'duration': _selectedMedicine!.duration,
-            'timing': _selectedMedicine!.timing.toJson(),
-          },
-        );
-      }
     });
   }
 
   void _addMedicine(String name, String type) {
     setState(() {
-      // Find extra data from master list if it exists
+      final cleanName = name.trim();
+      if (cleanName.isEmpty) return;
+
+      // Case-insensitive & trimmed lookup from MasterDataService or local cache
+      Map<String, dynamic>? masterItem = MasterDataService().findMedicine(cleanName);
+      if (masterItem == null) {
+        final localIdx = _medicineMasterList.indexWhere(
+          (m) => (m['name']?.toString().trim().toLowerCase() ?? '') == cleanName.toLowerCase(),
+        );
+        if (localIdx != -1) masterItem = _medicineMasterList[localIdx];
+      }
+
       String finalType = type;
       String finalUnit = "";
       String finalNote = "";
       Map<String, dynamic>? meta;
-      
-      final masterItem = _medicineMasterList.firstWhere(
-        (m) => m['name'] == name, 
-        orElse: () => {}
-      );
-      
-      if (masterItem.isNotEmpty) {
-        finalType = masterItem['type'] ?? type;
-        finalUnit = masterItem['unit'] ?? "";
-        finalNote = masterItem['default_note'] ?? "";
-        meta = masterItem['metadata'] as Map<String, dynamic>?;
+
+      if (masterItem != null && masterItem.isNotEmpty) {
+        final masterType = masterItem['type']?.toString().trim() ?? '';
+        finalType = masterType.isNotEmpty ? masterType : type;
+        finalUnit = masterItem['unit']?.toString().trim() ?? "";
+        finalNote = masterItem['default_note']?.toString().trim() ?? "";
+        meta = MasterDataService.parseMetadata(masterItem['metadata']);
       }
 
       final newMed = PrescriptionEntry(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          name: name,
-          type: finalType,
-          unit: finalUnit,
-          note: finalNote
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        name: cleanName,
+        type: finalType,
+        unit: finalUnit,
+        note: finalNote,
       );
 
       if (meta != null) {
-        if (meta['dosage'] != null) {
-          newMed.dosage = meta['dosage'].toString();
+        if (meta['dosage'] != null && meta['dosage'].toString().trim().isNotEmpty) {
+          newMed.dosage = meta['dosage'].toString().trim();
         }
-        if (meta['duration'] != null) {
-          newMed.duration = meta['duration'].toString();
+        if (meta['duration'] != null && meta['duration'].toString().trim().isNotEmpty) {
+          newMed.duration = meta['duration'].toString().trim();
         }
         if (meta['timing'] != null) {
           try {
-            newMed.timing = TimingSchedule.fromJson(Map<String, dynamic>.from(meta['timing']));
+            dynamic timingRaw = meta['timing'];
+            Map<String, dynamic> timingMap;
+            if (timingRaw is Map) {
+              timingMap = Map<String, dynamic>.from(timingRaw);
+            } else if (timingRaw is String && timingRaw.trim().isNotEmpty) {
+              final dec = jsonDecode(timingRaw);
+              timingMap = dec is Map ? Map<String, dynamic>.from(dec) : {};
+            } else {
+              timingMap = {};
+            }
+            newMed.timing = TimingSchedule.fromJson(timingMap);
           } catch (e) {
             debugPrint("Error parsing metadata timing: $e");
           }
@@ -453,6 +492,9 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
   }
 
   void _selectMedicine(PrescriptionEntry med) {
+    if (_selectedMedicine != null && _selectedMedicine != med) {
+      _saveCurrentMedicineMaster();
+    }
     setState(() {
       _selectedMedicine = med;
       _noteController.text = med.note;
@@ -599,7 +641,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
       separatorBuilder: (c, i) => const SizedBox(height: 16),
       itemBuilder: (context, index) {
         final visit = _patientHistory[index];
-        final DateTime date = DateTime.parse(visit['created_at']);
+        final DateTime date = DateTime.parse(visit['created_at']).toLocal();
         final List<dynamic> meds = visit['rx_list_json'] ?? [];
 
         return Container(
@@ -626,7 +668,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                       children: [
                         const Icon(Icons.event_note, size: 16, color: TxTheme.primary),
                         const SizedBox(width: 8),
-                        Text(DateFormat('dd MMM yyyy').format(date), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: TxTheme.textMain)),
+                        Text("${DateFormat('dd MMM yyyy').format(date)} • ${DateFormat('hh:mm a').format(date)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: TxTheme.textMain)),
                       ],
                     ),
                     InkWell(
@@ -705,6 +747,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                                   id: "${DateTime.now().millisecondsSinceEpoch}_${medName.hashCode}",
                                   name: entry.name,
                                   type: entry.type,
+                                  unit: entry.unit,
                                   dosage: entry.dosage,
                                   duration: entry.duration,
                                   note: entry.note,
@@ -802,12 +845,14 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                     hintText: "Type medicine name...",
                     allItems: _medicineMasterList.map<String>((e) => (e['name'] ?? '').toString()).where((n) => n.isNotEmpty).toList(),
                     onItemSelected: (selected) {
-                      if (!_medicineMasterList.any((m) => m['name'] == selected)) {
-                        _medicineMasterList.add({'name': selected, 'type': 'TAB', 'unit': ''});
-                        // PERMANENT SAVE TO CLOUD
-                        MasterDataService().saveMedicine(selected, 'TAB', '');
+                      final cleanSelected = selected.trim();
+                      if (cleanSelected.isEmpty) return;
+                      final existing = MasterDataService().findMedicine(cleanSelected);
+                      if (existing == null) {
+                        MasterDataService().saveMedicine(cleanSelected, 'TAB', '');
                       }
-                      _addMedicine(selected, "TAB");
+                      _medicineMasterList = MasterDataService().medicines;
+                      _addMedicine(cleanSelected, (existing?['type']?.toString().isNotEmpty ?? false) ? existing!['type'].toString() : "TAB");
                     },
                     onItemRemoved: (selected) {
                       setState(() {
@@ -1023,7 +1068,11 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                           Wrap(
                             spacing: 8, runSpacing: 8,
                             children: _suggestedMeds.take(8).map((name) => InkWell(
-                              onTap: () => _addMedicine(name, "TAB"),
+                              onTap: () {
+                                final clean = name.trim();
+                                final existing = MasterDataService().findMedicine(clean);
+                                _addMedicine(clean, (existing?['type']?.toString().isNotEmpty ?? false) ? existing!['type'].toString() : "TAB");
+                              },
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                 decoration: BoxDecoration(
@@ -1045,7 +1094,12 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                           Wrap(
                             spacing: 8, runSpacing: 8,
                             children: _medicineMasterList.take(8).map((item) => GestureDetector(
-                              onTap: () => _addMedicine(item['name']!, item['type'] ?? 'TAB'),
+                              onTap: () {
+                                final medName = (item['name'] ?? '').toString().trim();
+                                if (medName.isNotEmpty) {
+                                  _addMedicine(medName, (item['type'] ?? 'TAB').toString());
+                                }
+                              },
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                 decoration: BoxDecoration(
@@ -1053,7 +1107,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                                   border: Border.all(color: TxTheme.border),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
-                                child: Text(item['name']!, style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500, color: TxTheme.textMain)),
+                                child: Text((item['name'] ?? '').toString(), style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500, color: TxTheme.textMain)),
                               ),
                             )).toList(),
                           ),
@@ -1176,6 +1230,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                                             med.dosage = "1";
                                           }
                                         }
+                                        med.timing.updateActiveDosage(med.dosage);
                                       });
                                       _autoSave();
                                       // REMEMBER TYPE PREFERENCE
@@ -1258,7 +1313,13 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                 ...currentDoseOptions.map((dose) {
                   bool isSelected = med.dosage == dose;
                   return InkWell(
-                    onTap: () { setState(() => med.dosage = dose); _autoSave(); },
+                    onTap: () {
+                      setState(() {
+                        med.dosage = dose;
+                        med.timing.updateActiveDosage(dose);
+                      });
+                      _autoSave();
+                    },
                     child: Container(
                       width: 54, height: 54,
                       alignment: Alignment.center,
@@ -1315,6 +1376,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                           setState(() {
                             med.dosage = v;
                             _customDosageController.text = v;
+                            med.timing.updateActiveDosage(v);
                           });
                           _autoSave();
                         }
@@ -1448,37 +1510,52 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
               const SizedBox(height: 32),
               const SizedBox(height: 32),
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   _buildSectionTitle("INSTRUCTIONS / NOTES", Icons.sticky_note_2_outlined),
+                  const SizedBox(width: 12),
                   // QUICK SHORTCUTS
-                  Container(
-                    height: 28,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      shrinkWrap: true,
-                      children: [
-                        _buildNoteShortcut("Once a week", med),
-                        _buildNoteShortcut("Once a day", med),
-                        _buildNoteShortcut("Once a month", med),
-                        _buildNoteShortcut("STAT dose", med),
-                        const SizedBox(width: 8),
-                        InkWell(
-                          onTap: () {
-                            setState(() {
-                              _noteController.clear();
-                              med.note = "";
-                            });
-                            _autoSave();
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(color: Colors.red.withAlpha(20), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.red.withAlpha(40))),
-                            child: const Text("CLEAR", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.red)),
+                  Expanded(
+                    child: SizedBox(
+                      height: 28,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        children: [
+                          _buildNoteShortcut("SOS", med),
+                          _buildNoteShortcut("STAT", med),
+                          _buildNoteShortcut("Once a day", med),
+                          _buildNoteShortcut("Once a week", med),
+                          _buildNoteShortcut("Once a month", med),
+                          _buildNoteShortcut("Once a year", med),
+                          _buildNoteShortcut("Twice a day", med),
+                          _buildNoteShortcut("Thrice a day", med),
+                          _buildNoteShortcut("Four times a day", med),
+                          _buildNoteShortcut("Twice a week", med),
+                          _buildNoteShortcut("Alternate days", med),
+                          _buildNoteShortcut("Before food", med),
+                          _buildNoteShortcut("After food", med),
+                          _buildNoteShortcut("Empty stomach", med),
+                          _buildNoteShortcut("At bedtime", med),
+                          _buildNoteShortcut("With warm water", med),
+                          _buildNoteShortcut("With milk", med),
+                          _buildNoteShortcut("As directed", med),
+                          const SizedBox(width: 4),
+                          InkWell(
+                            onTap: () {
+                              setState(() {
+                                _noteController.clear();
+                                med.note = "";
+                              });
+                              _autoSave();
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(color: Colors.red.withAlpha(20), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.red.withAlpha(40))),
+                              child: const Text("CLEAR", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.red)),
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -1631,7 +1708,8 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                     if (isBeforeActive) {
                       setBefore("0");
                     } else {
-                      setBefore(activeDose);
+                      String doseToSet = (isAfterActive && afterVal != "0") ? afterVal : med.dosage;
+                      setBefore(doseToSet);
                       setAfter("0");
                     }
                   },
@@ -1646,7 +1724,8 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                     if (isAfterActive) {
                       setAfter("0");
                     } else {
-                      setAfter(activeDose);
+                      String doseToSet = (isBeforeActive && beforeVal != "0") ? beforeVal : med.dosage;
+                      setAfter(doseToSet);
                       setBefore("0");
                     }
                   },
@@ -1676,6 +1755,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
   }
 
   Widget _buildNoteShortcut(String label, PrescriptionEntry med) {
+    final bool isSelected = _noteController.text.trim().toLowerCase() == label.trim().toLowerCase();
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: InkWell(
@@ -1691,11 +1771,18 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
           padding: const EdgeInsets.symmetric(horizontal: 10),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: TxTheme.primary.withAlpha(10),
+            color: isSelected ? TxTheme.primary : TxTheme.primary.withAlpha(10),
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: TxTheme.primary.withAlpha(20)),
+            border: Border.all(color: isSelected ? TxTheme.primary : TxTheme.primary.withAlpha(20)),
           ),
-          child: Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: TxTheme.primary)),
+          child: Text(
+            label, 
+            style: TextStyle(
+              fontSize: 10, 
+              fontWeight: FontWeight.w700, 
+              color: isSelected ? Colors.white : TxTheme.primary,
+            ),
+          ),
         ),
       ),
     );

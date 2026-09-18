@@ -129,6 +129,42 @@ class Patient {
       fullData: map,
     );
   }
+
+  Patient copyWith({
+    String? name,
+    String? ageInfo,
+    String? phone,
+    String? initials,
+    String? gender,
+    String? id,
+    String? address,
+    int? opdRegistrationId,
+    String? visitType,
+    String? doctorId,
+    String? createdAt,
+    bool? isFinalized,
+    String? visitStatus,
+    String? hospitalName,
+    Map<String, dynamic>? fullData,
+  }) {
+    return Patient(
+      name: name ?? this.name,
+      ageInfo: ageInfo ?? this.ageInfo,
+      phone: phone ?? this.phone,
+      initials: initials ?? this.initials,
+      gender: gender ?? this.gender,
+      id: id ?? this.id,
+      address: address ?? this.address,
+      opdRegistrationId: opdRegistrationId ?? this.opdRegistrationId,
+      visitType: visitType ?? this.visitType,
+      doctorId: doctorId ?? this.doctorId,
+      createdAt: createdAt ?? this.createdAt,
+      isFinalized: isFinalized ?? this.isFinalized,
+      visitStatus: visitStatus ?? this.visitStatus,
+      hospitalName: hospitalName ?? this.hospitalName,
+      fullData: fullData ?? this.fullData,
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -570,33 +606,41 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
           .eq('is_Deleted', false);
 
       dynamic request;
-      if (searchQuery != null && searchQuery.isNotEmpty) {
+      if (searchQuery != null && searchQuery.trim().isNotEmpty) {
         final q = searchQuery.trim();
         
         // Step 1: Find patients that match the search query in patient_detail
-        // We use a separate query to be safe with cross-table filtering compatibility
+        final numVal = int.tryParse(q);
+        String filterString = 'name.ilike.%$q%,uhid.ilike.%$q%,address.ilike.%$q%';
+        if (numVal != null) {
+          filterString += ',number.eq.$numVal';
+        }
+        
         final patientSearch = await SupabaseHandler.client
             .from('patient_detail')
             .select('uhid')
-            .or('name.ilike.*$q*,uhid.ilike.*$q*,number.eq.${int.tryParse(q) ?? -1}')
+            .or(filterString)
             .limit(100);
         
-        final matchingUhids = (patientSearch as List).map((p) => p['uhid'].toString()).toList();
-        
-        // Step 2: Query opd_registration for these UHIDs OR direct UHID matches
-        String orFilter = 'uhid.ilike.*$q*';
-        if (matchingUhids.isNotEmpty) {
-          // Join matching UHIDs into a CSV for the .in_() filter equivalent in an or() string
-          final uhidList = matchingUhids.map((id) => '"$id"').join(',');
-          orFilter += ',uhid.in.($uhidList)';
+        final List<String> matchingUhids = [];
+        for (var p in patientSearch) {
+          final u = p['uhid']?.toString() ?? '';
+          if (u.isNotEmpty && !matchingUhids.contains(u)) {
+            matchingUhids.add(u);
+          }
         }
         
-        request = base.or(orFilter);
+        // Step 2: Query opd_registration for these UHIDs OR direct UHID matches
+        if (matchingUhids.isNotEmpty) {
+          request = base.inFilter('uhid', matchingUhids).order('created_at', ascending: false);
+        } else {
+          request = base.ilike('uhid', '%$q%').order('created_at', ascending: false);
+        }
       } else {
-        request = base.order('created_at', ascending: false).limit(50);
+        request = base.order('created_at', ascending: false);
       }
 
-      final response = await request.timeout(const Duration(seconds: 10));
+      final response = await request.timeout(const Duration(seconds: 15));
       final data = response as List<dynamic>;
 
       if (mounted) {

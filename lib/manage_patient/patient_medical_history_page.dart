@@ -486,7 +486,7 @@ class _PatientMedicalHistoryPageState extends State<PatientMedicalHistoryPage> {
         Row(children: [Expanded(child: _timingBlock("Breakfast", Icons.wb_twilight, med, 'bb', 'ab')), const SizedBox(width: 12), Expanded(child: _timingBlock("Lunch", Icons.wb_sunny, med, 'bl', 'al')), const SizedBox(width: 12), Expanded(child: _timingBlock("Dinner", Icons.nights_stay, med, 'bd', 'ad'))]),
         const SizedBox(height: 32), _sectionTitle("DURATION / SINCE", Icons.calendar_today_outlined), const SizedBox(height: 12),
         Wrap(spacing: 8, runSpacing: 8, children: [..._durationOptions.map((dur) => _durationChip(med, dur)), _customDurationInput(med)]),
-        const SizedBox(height: 32), Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [_sectionTitle("INSTRUCTIONS / NOTES", Icons.sticky_note_2_outlined), _noteShortcuts(med)]),
+        const SizedBox(height: 32), Row(children: [_sectionTitle("INSTRUCTIONS / NOTES", Icons.sticky_note_2_outlined), const SizedBox(width: 12), Expanded(child: _noteShortcuts(med))]),
         const SizedBox(height: 12), TextField(controller: _noteController, onChanged: (v) => med['note'] = v, maxLines: 2, decoration: InputDecoration(hintText: "Notes...", filled: true, fillColor: Colors.white, border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none))),
       ])),
     ]);
@@ -514,5 +514,58 @@ class _PatientMedicalHistoryPageState extends State<PatientMedicalHistoryPage> {
   }
   Widget _durationChip(Map<String, dynamic> med, String val) { bool isSel = med['duration'] == val; return InkWell(onTap: () => setState(() => med['duration'] = val), child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), decoration: BoxDecoration(color: isSel ? AppColors.textPrimary : Colors.white, border: Border.all(color: AppColors.border), borderRadius: BorderRadius.circular(8)), child: Text(val, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isSel ? Colors.white : AppColors.textSecondary)))); }
   Widget _customDurationInput(Map<String, dynamic> med) => Container(width: 120, padding: const EdgeInsets.symmetric(horizontal: 8), decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppColors.border), borderRadius: BorderRadius.circular(8)), child: Row(children: [Expanded(child: DropdownButtonHideUnderline(child: DropdownButton<String>(value: _customDurationController.text.isNotEmpty ? _customDurationController.text : null, items: List.generate(30, (i) => (i + 1).toString()).map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(), onChanged: (v) { setState(() { _customDurationController.text = v!; med['duration'] = "$v$_customDurationUnit"; }); }))), DropdownButtonHideUnderline(child: DropdownButton<String>(value: _customDurationUnit, items: ['d','w','m','y'].map((u) => DropdownMenuItem(value: u, child: Text(u.toUpperCase()))).toList(), onChanged: (v) { setState(() { _customDurationUnit = v!; med['duration'] = "${_customDurationController.text}$v"; }); }))]));
-  Widget _noteShortcuts(Map<String, dynamic> med) => SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: ["Once a day", "Once a week", "Once a month", "Once a year", "STAT"].map((n) => Padding(padding: const EdgeInsets.only(right: 6), child: InkWell(onTap: () { setState(() { _noteController.text = n; med['note'] = n; }); }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6)), child: Text(n, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppColors.primary)))))).toList()));
+  Widget _noteShortcuts(Map<String, dynamic> med) => SingleChildScrollView(
+    scrollDirection: Axis.horizontal, 
+    child: Row(
+      children: [
+        "SOS", 
+        "STAT", 
+        "Once a day", 
+        "Once a week", 
+        "Once a month", 
+        "Once a year", 
+        "Twice a day", 
+        "Thrice a day", 
+        "Four times a day", 
+        "Twice a week", 
+        "Alternate days", 
+        "Before food", 
+        "After food", 
+        "Empty stomach", 
+        "At bedtime", 
+        "With warm water", 
+        "With milk", 
+        "As directed",
+      ].map((n) {
+        final bool isSelected = _noteController.text.trim().toLowerCase() == n.trim().toLowerCase();
+        return Padding(
+          padding: const EdgeInsets.only(right: 6), 
+          child: InkWell(
+            onTap: () { 
+              setState(() { 
+                _noteController.text = n; 
+                med['note'] = n; 
+              }); 
+            }, 
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), 
+              decoration: BoxDecoration(
+                color: isSelected ? AppColors.primary : AppColors.primary.withValues(alpha: 0.1), 
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: isSelected ? AppColors.primary : AppColors.primary.withValues(alpha: 0.2)),
+              ), 
+              child: Text(
+                n, 
+                style: TextStyle(
+                  fontSize: 10, 
+                  fontWeight: FontWeight.bold, 
+                  color: isSelected ? Colors.white : AppColors.primary,
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    ),
+  );
 }

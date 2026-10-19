@@ -74,10 +74,28 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
 
   // ── Filter Logic ───────────────────────────────────────────────
   void _applyFilters() {
-    final query   = _searchController.text.trim().toLowerCase();
-    final now     = DateTime.now();
-    final today   = DateTime(now.year, now.month, now.day);
+    final query = _searchController.text.trim().toLowerCase();
+    final cleanQuery = query
+        .replaceAll(RegExp(r'^(id|uhid)[:\s#]+', caseSensitive: false), '')
+        .replaceAll('#', '')
+        .trim();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     final yesterday = today.subtract(const Duration(days: 1));
+
+    bool matchesQuery(Patient p) {
+      if (query.isEmpty) return true;
+      final matchesName  = p.name.toLowerCase().contains(query) || (cleanQuery.isNotEmpty && p.name.toLowerCase().contains(cleanQuery));
+      final matchesPhone = p.phone.toLowerCase().contains(query) || (cleanQuery.isNotEmpty && p.phone.toLowerCase().contains(cleanQuery));
+      final matchesId    = p.id.toLowerCase().contains(query) || (cleanQuery.isNotEmpty && p.id.toLowerCase().contains(cleanQuery));
+      final matchesAddr  = p.address.toLowerCase().contains(query) || (cleanQuery.isNotEmpty && p.address.toLowerCase().contains(cleanQuery));
+      final opdStr       = p.opdRegistrationId.toString();
+      final matchesOpdId = opdStr == query ||
+                           opdStr == cleanQuery ||
+                           opdStr.contains(query) ||
+                           (cleanQuery.isNotEmpty && opdStr.contains(cleanQuery));
+      return matchesName || matchesPhone || matchesId || matchesAddr || matchesOpdId;
+    }
 
     List<Patient> result = [];
 
@@ -89,14 +107,7 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
       result = widget.patients.where((p) {
         final matchesHospital = _selectedHospital == "All Hospitals" || p.hospitalName == _selectedHospital;
         if (!matchesHospital) return false;
-        if (query.isEmpty) return true;
-        
-        final matchesName  = p.name.toLowerCase().contains(query);
-        final matchesPhone = p.phone.toLowerCase().contains(query);
-        final matchesId    = p.id.toLowerCase().contains(query);
-        final matchesAddr  = p.address.toLowerCase().contains(query);
-        
-        return matchesName || matchesPhone || matchesId || matchesAddr;
+        return matchesQuery(p);
       }).toList();
     } else {
       result = widget.patients.where((p) {
@@ -108,11 +119,7 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
             ? pDay.isAtSameMomentAs(today)
             : pDay.isAtSameMomentAs(yesterday);
         if (!dateOk) return false;
-        if (query.isEmpty) return true;
-        return p.name.toLowerCase().contains(query) ||
-               p.phone.toLowerCase().contains(query) ||
-               p.id.toLowerCase().contains(query) ||
-               p.address.toLowerCase().contains(query);
+        return matchesQuery(p);
       }).toList();
     }
 
@@ -148,12 +155,19 @@ class _LeftPanelPatientListState extends State<LeftPanelPatientList>
       _applyFilters();
     } else {
       if (value.trim().isEmpty) {
+        _searchDebounce?.cancel();
         setState(() {
           _hasSearchedAllMode = false;
           _visiblePatients    = [];
         });
       } else {
         setState(() {});
+        _searchDebounce?.cancel();
+        _searchDebounce = Timer(const Duration(milliseconds: 600), () {
+          if (mounted && _currentFilter == DateFilter.all && _searchController.text.trim().isNotEmpty) {
+            _onSearchTriggered();
+          }
+        });
       }
     }
   }

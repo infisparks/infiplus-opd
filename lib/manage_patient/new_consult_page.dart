@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../main.dart'; // Patient Model + AppColors
-import 'dart:io';
-import 'package:file_picker/file_picker.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'vitals_tab.dart';
 import 'symptoms_tab.dart';
@@ -105,11 +102,12 @@ class _NewConsultPageState extends State<NewConsultPage> {
     setState(() => _currentTabIndex = index);
     _pageController.jumpToPage(index);
 
-    // If switching to Print Tab, trigger a fresh fetch after a brief delay
-    // to allow any pending debounced auto-saves from previous tabs to complete.
+    // If switching to Print Tab, trigger an immediate fresh fetch from local disk
+    // and a follow-up after 300ms to guarantee zero delay for newly added medicines.
     if (index == 7) {
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted) ServerDataService.refreshNotifier.value++;
+      _previewKey.currentState?.refreshData();
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted) _previewKey.currentState?.refreshData();
       });
     }
   }

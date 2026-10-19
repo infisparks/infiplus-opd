@@ -32,6 +32,7 @@ class ReportPdfGenerator {
     final Map<String, bool> toggles = Map<String, bool>.from(config['toggles'] ?? {});
     final double marginTop = (config['margin_top'] ?? 50.0).toDouble();
     final double marginBottom = (config['margin_bottom'] ?? 50.0).toDouble();
+    final double marginHorizontal = (config['margin_horizontal'] ?? config['margin_side'] ?? 35.0).toDouble();
 
     // Use Poppins for a premium, modern clinical look
     final font = await PdfGoogleFonts.poppinsRegular();
@@ -40,9 +41,12 @@ class ReportPdfGenerator {
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
-        margin: pw.EdgeInsets.only(top: marginTop, bottom: marginBottom, left: 35, right: 35),
+        margin: pw.EdgeInsets.only(top: marginTop, bottom: marginBottom, left: marginHorizontal, right: marginHorizontal),
         header: (pw.Context context) {
           if (context.pageNumber == 1) {
+             if (toggles["Header"] == false) {
+               return pw.SizedBox();
+             }
              return pw.Column(
                children: [
                  _buildHeader(patient, opdId, date, font, fontBold),
@@ -68,7 +72,7 @@ class ReportPdfGenerator {
         build: (pw.Context context) {
           return [
               // 2. VITALS BANNER
-              if (vitalsText.isNotEmpty)
+              if ((toggles["Vitals"] ?? true) && vitalsText.isNotEmpty)
                 pw.Padding(
                   padding: const pw.EdgeInsets.only(bottom: 16),
                   child: pw.Container(
@@ -116,7 +120,7 @@ class ReportPdfGenerator {
                 ),
 
               // 7. MEDICINE TABLE
-              if (rxList.isNotEmpty) ...[
+              if ((toggles["Rx"] ?? toggles["Prescription"] ?? true) && rxList.isNotEmpty) ...[
                 pw.Table(
                   border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
                   columnWidths: const {
@@ -188,7 +192,7 @@ class ReportPdfGenerator {
               pw.SizedBox(height: 20),
 
               // 10. FOOTER
-              if (followUpText.isNotEmpty || referDoctorText.isNotEmpty)
+              if ((toggles["Follow Up"] ?? true) && (followUpText.isNotEmpty || referDoctorText.isNotEmpty))
                 pw.Container(
                   padding: const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColors.grey300), borderRadius: pw.BorderRadius.circular(4)),
@@ -250,7 +254,7 @@ class ReportPdfGenerator {
               pw.SizedBox(height: 4),
               pw.Text("${patient.ageInfo} / ${patient.gender}   |   PID: ${patient.id}", style: pw.TextStyle(font: font, fontSize: 9)),
               pw.Text("Phone: ${patient.phone}", style: pw.TextStyle(font: font, fontSize: 9)),
-              if (patient.address != null && patient.address!.isNotEmpty)
+              if (patient.address.isNotEmpty)
                 pw.Text("Addr: ${patient.address}", style: pw.TextStyle(font: font, fontSize: 8, color: PdfColors.grey700)),
             ],
           ),

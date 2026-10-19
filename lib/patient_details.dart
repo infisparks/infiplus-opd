@@ -17,7 +17,7 @@ class RightPanelPatientDetails extends StatefulWidget {
   final Patient patient;
 
   /// Software version displayed in the top header. Update this value with each release.
-  static const String appVersion = "v4.12";
+  static const String appVersion = "v4.13";
 
   const RightPanelPatientDetails({super.key, required this.patient});
 
@@ -79,13 +79,24 @@ class _RightPanelPatientDetailsState extends State<RightPanelPatientDetails> {
           .order('created_at', ascending: false);
 
       if (mounted) {
+        final list = response is List ? List<Map<String, dynamic>>.from(response) : <Map<String, dynamic>>[];
+        final targetIndex = list.indexWhere((v) => v['id'] == widget.patient.opdRegistrationId);
         setState(() {
-          _allVisits    = response is List ? List<Map<String, dynamic>>.from(response) : [];
-          _currentIndex = 0;
+          _allVisits    = list;
+          _currentIndex = targetIndex != -1 ? targetIndex : 0;
         });
+        if (_pageController.hasClients && _currentIndex != 0) {
+          _pageController.jumpToPage(_currentIndex);
+        }
       }
     } catch (e) {
       debugPrint("Error fetching patient history: $e");
+      if (mounted && _allVisits.isEmpty && widget.patient.fullData.isNotEmpty) {
+        setState(() {
+          _allVisits = [Map<String, dynamic>.from(widget.patient.fullData)];
+          _currentIndex = 0;
+        });
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }

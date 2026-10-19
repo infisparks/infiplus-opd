@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -9,6 +8,7 @@ import '../supabase_handler.dart';
 import '../services/master_data_service.dart'; // NEW
 import '../main.dart';
 import '../services/server_data_service.dart';
+import '../services/offline_sync_service.dart';
 import 'full_screen_search.dart';
 
 // --- THEME ---
@@ -60,7 +60,8 @@ class TimingSchedule {
     'bd': beforeDinner, 'ad': afterDinner,
   };
 
-  factory TimingSchedule.fromJson(Map<String, dynamic> json) {
+  factory TimingSchedule.fromJson(dynamic rawJson) {
+    final Map<String, dynamic> json = (rawJson is Map) ? Map<String, dynamic>.from(rawJson) : {};
     String parseVal(dynamic val) {
       if (val is bool) {
         return val ? "1" : "0";
@@ -121,16 +122,33 @@ class PrescriptionEntry {
     'timing': timing.toJson(),
   };
 
-  factory PrescriptionEntry.fromJson(Map<String, dynamic> json) {
+  factory PrescriptionEntry.fromJson(dynamic raw) {
+    final Map<String, dynamic> json = (raw is Map) ? Map<String, dynamic>.from(raw) : {};
+
+    dynamic timingRaw = json['timing'] ?? json['timing_json'];
+    TimingSchedule? schedule;
+    if (timingRaw != null) {
+      if (timingRaw is Map) {
+        schedule = TimingSchedule.fromJson(Map<String, dynamic>.from(timingRaw));
+      } else if (timingRaw is String && timingRaw.trim().isNotEmpty) {
+        try {
+          final decoded = jsonDecode(timingRaw);
+          if (decoded is Map) {
+            schedule = TimingSchedule.fromJson(Map<String, dynamic>.from(decoded));
+          }
+        } catch (_) {}
+      }
+    }
+
     return PrescriptionEntry(
-      id: json['id'] ?? '',
-      name: json['name'] ?? '',
-      type: json['type'] ?? '',
-      unit: json['unit'] ?? '',
-      dosage: json['dosage'],
-      duration: json['duration'] ?? '1d',
-      note: json['note'] ?? '',
-      timing: json['timing'] != null ? TimingSchedule.fromJson(json['timing']) : null,
+      id: json['id']?.toString() ?? '',
+      name: (json['name'] ?? json['medicine_name'] ?? '').toString().trim(),
+      type: (json['type'] ?? json['medicine_type'] ?? '').toString().trim(),
+      unit: json['unit']?.toString() ?? '',
+      dosage: json['dosage']?.toString(),
+      duration: (json['duration'] ?? '1d').toString(),
+      note: json['note']?.toString() ?? '',
+      timing: schedule,
     );
   }
 }
@@ -211,6 +229,12 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
   Future<void> _smartLoadData() async {
     await _loadMasterData();
 
+    // 1. Instantly populate from local on-disk cache (0ms instant display, protects offline edits)
+    final localData = OfflineSyncService().getLocalClinicalData(widget.opdId, 'treatment_data');
+    if (localData != null) {
+      _populatePrescription(localData);
+    }
+
     // Check Internet
     var connectivityResult = await (Connectivity().checkConnectivity());
     bool hasInternet = !connectivityResult.contains(ConnectivityResult.none);
@@ -221,7 +245,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
       if (mounted) setState(() => _isOnline = false);
     }
 
-    // Load Data from Server (Source of Truth for Editing)
+    // 2. Sync with Server (ServerDataService respects pending local edits and will sync queue)
     final serverData = await ServerDataService.fetchData(widget.opdId, 'treatment_data');
     if (serverData != null) {
       _populatePrescription(serverData);
@@ -390,7 +414,6 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
         _selectedMedicine!.name,
         _selectedMedicine!.type,
         _selectedMedicine!.unit,
-        defaultNote: _selectedMedicine!.note,
         metadata: {
           'dosage': _selectedMedicine!.dosage,
           'duration': _selectedMedicine!.duration,
@@ -401,11 +424,57 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
     }
   }
 
+  Future<void> _saveNoteToMaster(PrescriptionEntry med) async {
+    final noteToSave = _noteController.text.trim();
+    await MasterDataService().saveMedicine(
+      med.name,
+      med.type,
+      med.unit,
+      defaultNote: noteToSave,
+      metadata: {
+        'dosage': med.dosage,
+        'duration': med.duration,
+        'timing': med.timing.toJson(),
+      },
+    );
+    _medicineMasterList = MasterDataService().medicines;
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  noteToSave.isEmpty
+                      ? "Default note cleared in master database"
+                      : "Saved default note for ${med.name}",
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: TxTheme.primary,
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+    }
+  }
+
   void _autoSave() {
     final jsonList = _currentPrescription.map((e) => e.toJson()).toList();
 
     _saveCurrentMedicineMaster();
 
+    // 1. Immediately cache to local disk (0ms latency, zero data loss)
+    OfflineSyncService().saveClinicalData(widget.opdId, 'treatment_data', jsonList);
+    ServerDataService.refreshNotifier.value++;
+
+    // 2. Debounce background cloud sync
     if (_debounce?.isActive ?? false) _debounce!.cancel();
     _debounce = Timer(const Duration(milliseconds: 500), () {
       ServerDataService.saveData(widget.opdId, 'treatment_data', jsonList, silent: true);
@@ -1200,7 +1269,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                             height: 38,
                             child: ListView(
                               scrollDirection: Axis.horizontal,
-                              children: ["TAB","CAP","SYRUP","SUSP","DROP","INJ","CREAM","OINT"].map((type) {
+                              children: ["TAB","CAP","SYRUP","SUSP","DROP","INJ","CREAM","OINT","INHALER","ROTA CAP","RESPULES","AMPULES"].map((type) {
                                 bool isSelected = med.type.toUpperCase() == type;
                                 return Padding(
                                   padding: const EdgeInsets.only(right: 6),
@@ -1227,6 +1296,26 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                                         } else if (type == "INJ") {
                                           med.unit = "inj";
                                           if (!["1", "2", "3", "4", "5", "10"].contains(med.dosage)) {
+                                            med.dosage = "1";
+                                          }
+                                        } else if (type == "INHALER") {
+                                          med.unit = "puff";
+                                          if (!["1", "2", "3", "4"].contains(med.dosage)) {
+                                            med.dosage = "1";
+                                          }
+                                        } else if (type == "ROTA CAP") {
+                                          med.unit = "rotacap";
+                                          if (!["1", "2", "3"].contains(med.dosage)) {
+                                            med.dosage = "1";
+                                          }
+                                        } else if (type == "RESPULES") {
+                                          med.unit = "respules";
+                                          if (!["1", "2", "3", "4", "5"].contains(med.dosage)) {
+                                            med.dosage = "1";
+                                          }
+                                        } else if (type == "AMPULES") {
+                                          med.unit = "ampules";
+                                          if (!["1", "2", "3", "4", "5"].contains(med.dosage)) {
                                             med.dosage = "1";
                                           }
                                         }
@@ -1261,7 +1350,17 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                         // Unit
                         _buildHeaderDropdown(
                           value: med.unit.isNotEmpty ? med.unit : null,
-                          items: ["mg","ml","mcg","tab","cap","tsp","drop","IU","inj","amp", if (med.unit.isNotEmpty && !["mg","ml","mcg","tab","cap","tsp","drop","IU","inj","amp"].contains(med.unit)) med.unit, "Other..."],
+                          items: [
+                            "mg", "ml", "mcg", "tab", "cap", "tsp", "drop", "puff", 
+                            "inhaler", "rotacap", "respule", "respules", "ampule", "ampules", 
+                            "IU", "inj", "amp",
+                            if (med.unit.isNotEmpty && ![
+                              "mg", "ml", "mcg", "tab", "cap", "tsp", "drop", "puff", 
+                              "inhaler", "rotacap", "respule", "respules", "ampule", "ampules", 
+                              "IU", "inj", "amp"
+                            ].contains(med.unit)) med.unit,
+                            "Other..."
+                          ],
                           hint: "UNIT",
                           bgColor: TxTheme.primary.withAlpha(10),
                           textColor: TxTheme.primary,
@@ -1507,8 +1606,7 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                   ),
                 ],
               ),
-              const SizedBox(height: 32),
-              const SizedBox(height: 32),
+              const SizedBox(height: 24),
               Row(
                 children: [
                   _buildSectionTitle("INSTRUCTIONS / NOTES", Icons.sticky_note_2_outlined),
@@ -1550,7 +1648,11 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8),
                               alignment: Alignment.center,
-                              decoration: BoxDecoration(color: Colors.red.withAlpha(20), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.red.withAlpha(40))),
+                              decoration: BoxDecoration(
+                                color: Colors.red.withAlpha(20),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.red.withAlpha(40)),
+                              ),
                               child: const Text("CLEAR", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.red)),
                             ),
                           ),
@@ -1562,20 +1664,79 @@ class _TreatmentTabState extends State<TreatmentTab> with AutomaticKeepAliveClie
               ),
               const SizedBox(height: 12),
               Container(
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: TxTheme.border)),
-                child: TextField(
-                  controller: _noteController,
-                  onChanged: (val) { med.note = val; _autoSave(); },
-                  maxLines: 2,
-                  style: const TextStyle(fontSize: 14),
-                  decoration: const InputDecoration(
-                      hintText: "e.g. Take with warm water...",
-                      hintStyle: TextStyle(color: Colors.black26),
-                      border: InputBorder.none,
-                      contentPadding: EdgeInsets.all(16)
-                  ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: TxTheme.border),
                 ),
-              )
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: _noteController,
+                      onChanged: (val) {
+                        med.note = val;
+                        _autoSave();
+                      },
+                      maxLines: 2,
+                      style: const TextStyle(fontSize: 14),
+                      decoration: const InputDecoration(
+                        hintText: "e.g. Take with warm water...",
+                        hintStyle: TextStyle(color: Colors.black26),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.fromLTRB(16, 14, 16, 8),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(14, 6, 10, 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF9FAFB),
+                        borderRadius: const BorderRadius.only(
+                          bottomLeft: Radius.circular(11),
+                          bottomRight: Radius.circular(11),
+                        ),
+                        border: Border(top: BorderSide(color: Colors.grey.shade200)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 13, color: Colors.grey.shade500),
+                          const SizedBox(width: 5),
+                          Expanded(
+                            child: Text(
+                              "Saved for this prescription only. Click Save to make default for ${med.name}.",
+                              style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          InkWell(
+                            onTap: () => _saveNoteToMaster(med),
+                            borderRadius: BorderRadius.circular(6),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: TxTheme.primary,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: const [
+                                  Icon(Icons.save_outlined, size: 13, color: Colors.white),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    "Save Default",
+                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),

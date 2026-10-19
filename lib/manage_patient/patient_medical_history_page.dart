@@ -472,8 +472,8 @@ class _PatientMedicalHistoryPageState extends State<PatientMedicalHistoryPage> {
           Text(med['name'], style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Row(children: [
-            Expanded(child: SizedBox(height: 34, child: ListView(scrollDirection: Axis.horizontal, children: ["TAB","CAP","SYRUP","SUSP","DROP","INJ","CREAM"].map((t) { bool isSel = med['type'] == t; return Padding(padding: const EdgeInsets.only(right: 6), child: InkWell(onTap: () => setState(() => med['type'] = t), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12), alignment: Alignment.center, decoration: BoxDecoration(color: isSel ? AppColors.primary : AppColors.bgBody, borderRadius: BorderRadius.circular(6)), child: Text(t, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isSel ? Colors.white : AppColors.textSecondary))))); }).toList()))),
-            const SizedBox(width: 8), _dropdownHeader(med, 'unit', ["mg","ml","mcg","tab","cap","drop"]),
+            Expanded(child: SizedBox(height: 34, child: ListView(scrollDirection: Axis.horizontal, children: ["TAB","CAP","SYRUP","SUSP","DROP","INJ","CREAM","OINT","INHALER","ROTA CAP","RESPULES","AMPULES"].map((t) { bool isSel = med['type'] == t; return Padding(padding: const EdgeInsets.only(right: 6), child: InkWell(onTap: () => setState(() => med['type'] = t), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12), alignment: Alignment.center, decoration: BoxDecoration(color: isSel ? AppColors.primary : AppColors.bgBody, borderRadius: BorderRadius.circular(6)), child: Text(t, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isSel ? Colors.white : AppColors.textSecondary))))); }).toList()))),
+            const SizedBox(width: 8), _dropdownHeader(med, 'unit', ["mg","ml","mcg","tab","cap","drop","puff","inhaler","rotacap","respule","respules","ampule","ampules"]),
           ]),
         ])),
         const SizedBox(width: 16), _statusToggle(med), const SizedBox(width: 8), IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), onPressed: () => _removeMedicine(med)),

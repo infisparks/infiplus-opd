@@ -1,22 +1,55 @@
 import 'package:flutter/foundation.dart';
 import '../supabase_handler.dart';
+import 'offline_sync_service.dart';
 
 class ServerDataService {
-  static final ValueNotifier<int> refreshNotifier = ValueNotifier(0);
+  static final ValueNotifier<int> refreshNotifier = _initRefreshNotifier();
 
-  // Directly fetch data based on the specific key
+  static ValueNotifier<int> _initRefreshNotifier() {
+    final notifier = ValueNotifier(0);
+    OfflineSyncService().syncEventNotifier.addListener(() {
+      notifier.value++;
+    });
+    return notifier;
+  }
+
+  // Directly fetch data based on the specific key with offline disk fallback
   static Future<dynamic> fetchData(int opdId, String key) async {
+    // 1. If local disk has pending unsynced changes waiting in the queue,
+    // NEVER fetch stale cloud data that would wipe out the doctor's offline edits!
+    if (OfflineSyncService().hasPendingSync(opdId, key)) {
+      debugPrint("⏳ Pending sync found for $key (OPD $opdId). Returning local disk data and triggering queue sync.");
+      OfflineSyncService().syncPendingQueue();
+      return OfflineSyncService().getLocalClinicalData(opdId, key);
+    }
+
+    // 2. Check local on-disk cache first (0ms response)
+    final localData = OfflineSyncService().getLocalClinicalData(opdId, key);
+
     try {
+      dynamic result;
       if (key == 'symptoms') {
-        final res = await SupabaseHandler.client.from('opd_reg_symptoms').select().eq('opd_id', opdId);
-        return res is List ? res : [];
+        final res = await SupabaseHandler.client
+            .from('opd_reg_symptoms')
+            .select()
+            .eq('opd_id', opdId)
+            .timeout(const Duration(seconds: 4));
+        result = res is List ? res : [];
       } else if (key == 'diagnosis_data') {
-        final res = await SupabaseHandler.client.from('opd_reg_diagnosis').select().eq('opd_id', opdId);
-        return res is List ? res : [];
+        final res = await SupabaseHandler.client
+            .from('opd_reg_diagnosis')
+            .select()
+            .eq('opd_id', opdId)
+            .timeout(const Duration(seconds: 4));
+        result = res is List ? res : [];
       } else if (key == 'treatment_data') {
-        final res = await SupabaseHandler.client.from('opd_reg_rx').select().eq('opd_id', opdId);
+        final res = await SupabaseHandler.client
+            .from('opd_reg_rx')
+            .select()
+            .eq('opd_id', opdId)
+            .timeout(const Duration(seconds: 4));
         if (res is List) {
-          return res.map((r) => {
+          result = res.map((r) => {
             'id': r['id'].toString(),
             'name': r['medicine_name'],
             'type': r['medicine_type'],
@@ -26,10 +59,15 @@ class ServerDataService {
             'timing': r['timing_json'],
             'note': r['note'],
           }).toList();
+        } else {
+          result = [];
         }
-        return [];
       } else if (key == 'instructions_data') {
-        final res = await SupabaseHandler.client.from('opd_reg_reports').select().eq('opd_id', opdId);
+        final res = await SupabaseHandler.client
+            .from('opd_reg_reports')
+            .select()
+            .eq('opd_id', opdId)
+            .timeout(const Duration(seconds: 4));
         if (res is List) {
           Map<String, List<String>> combined = {'instructions': [], 'investigations': [], 'procedures': []};
           for (var r in res) {
@@ -39,27 +77,47 @@ class ServerDataService {
             else if (type == 'investigation') combined['investigations']!.add(name);
             else if (type == 'procedure') combined['procedures']!.add(name);
           }
-          return combined;
+          result = combined;
+        } else {
+          result = {};
         }
-        return {};
       } else {
         // Generic keys go to clinical_data in opd_registration table
-        final res = await SupabaseHandler.client.from('opd_registration').select('clinical_data, clinical_notes').eq('id', opdId).maybeSingle();
+        final res = await SupabaseHandler.client
+            .from('opd_registration')
+            .select('clinical_data, clinical_notes')
+            .eq('id', opdId)
+            .maybeSingle()
+            .timeout(const Duration(seconds: 4));
         if (res != null) {
-          if (key == 'clinical_notes') return res['clinical_notes'];
-          if (res['clinical_data'] != null) {
-            return res['clinical_data'][key];
+          if (key == 'clinical_notes') {
+            result = res['clinical_notes'];
+          } else if (res['clinical_data'] != null) {
+            result = res['clinical_data'][key];
           }
         }
       }
+
+      // If online fetch succeeded, save to local disk cache (without polluting sync queue)
+      if (result != null) {
+        await OfflineSyncService().cacheServerData(opdId, key, result);
+        return result;
+      }
     } catch (e) {
-      debugPrint("ServerFetch Error for $key: $e");
+      debugPrint("ServerFetch Error/Offline for $key: $e (loading local disk data)");
     }
-    return null;
+
+    // Return local on-disk cached data if online fetch fails or times out
+    return localData;
   }
 
-  // Directly save data to server immediately
+  // Directly save data with local on-disk persistence and background sync queue
   static Future<void> saveData(int opdId, String key, dynamic data, {bool silent = false}) async {
+    // 1. Immediately save to physical disk & enqueue for zero data loss
+    await OfflineSyncService().saveClinicalData(opdId, key, data);
+    if (!silent) refreshNotifier.value++;
+
+    // 2. Try online sync immediately
     try {
       if (key == 'symptoms') {
         await SupabaseHandler.client.from('opd_reg_symptoms').delete().eq('opd_id', opdId);
@@ -135,9 +193,10 @@ class ServerDataService {
         }
       }
 
-      if (!silent) refreshNotifier.value++;
+      // If online save succeeded, drain queue
+      OfflineSyncService().syncPendingQueue();
     } catch (e) {
-      debugPrint("ServerSave Error for $key: $e");
+      debugPrint("ServerSave Offline/Pending for $key: $e (stored safely on disk)");
     }
   }
 

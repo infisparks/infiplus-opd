@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../supabase_handler.dart';
+import 'offline_sync_service.dart';
 
 /// MasterDataService: A high-performance singleton for clinical data.
 /// Loads clinical datasets (Symptoms, Diagnoses, Medicines, etc.) into memory session-only.
@@ -21,16 +22,40 @@ class MasterDataService {
   bool isLoaded = false;
   final ValueNotifier<bool> loadStatus = ValueNotifier(false);
 
-  /// Fetch all master data from Cloud on startup.
+  /// Fetch all master data with disk-first cache policy
   Future<void> initialize() async {
-    // Always refetch if requested (Load every time from server policy)
-    await syncWithCloud();
-    
+    // 1. Immediately load cached master data from disk (0ms)
+    _loadFromDiskCache();
     isLoaded = true;
     loadStatus.value = true;
+
+    // 2. Silently update from cloud in background if connected
+    syncWithCloud();
   }
 
-  /// Refetches latest datasets from Supabase and updates in-memory cache.
+  void _loadFromDiskCache() {
+    try {
+      final cachedMeds = OfflineSyncService().getCachedMasterData('medicines');
+      if (cachedMeds is List && cachedMeds.isNotEmpty) {
+        medicines = List<Map<String, dynamic>>.from(cachedMeds);
+        debugPrint("💾 Loaded ${medicines.length} medicines from disk cache");
+      }
+      final cachedDatasets = OfflineSyncService().getCachedMasterData('datasets');
+      if (cachedDatasets is Map) {
+        symptoms = List<String>.from(cachedDatasets['symptoms'] ?? []);
+        diagnoses = List<String>.from(cachedDatasets['diagnoses'] ?? []);
+        findings = List<String>.from(cachedDatasets['findings'] ?? []);
+        instructions = List<String>.from(cachedDatasets['instructions'] ?? []);
+        investigations = List<String>.from(cachedDatasets['investigations'] ?? []);
+        procedures = List<String>.from(cachedDatasets['procedures'] ?? []);
+        debugPrint("💾 Loaded clinical datasets from disk cache");
+      }
+    } catch (e) {
+      debugPrint("Error loading master data from disk cache: $e");
+    }
+  }
+
+  /// Refetches latest datasets from Supabase and updates in-memory cache and on-disk cache.
   Future<void> syncWithCloud() async {
     try {
       debugPrint("📡 Syncing Master Data from Cloud...");
@@ -76,7 +101,9 @@ class MasterDataService {
           'default_note': row['default_note']?.toString() ?? '', 
           'metadata': parseMetadata(row['metadata']),
         }).toList();
-        debugPrint("✅ Medicines Synced: ${medicines.length}");
+        // Persist to disk for offline usage
+        await OfflineSyncService().cacheMasterData('medicines', medicines);
+        debugPrint("✅ Medicines Synced & Cached on Disk: ${medicines.length}");
       }
     } catch (e) {
       debugPrint("❌ MasterData Sync Error (_syncMedicines): $e");
@@ -109,7 +136,16 @@ class MasterDataService {
         else if (name == 'investigations') investigations = list;
         else if (name == 'procedures') procedures = list;
       }
-      debugPrint("✅ Datasets Synced");
+      // Persist to disk for offline usage
+      await OfflineSyncService().cacheMasterData('datasets', {
+        'symptoms': symptoms,
+        'diagnoses': diagnoses,
+        'findings': findings,
+        'instructions': instructions,
+        'investigations': investigations,
+        'procedures': procedures,
+      });
+      debugPrint("✅ Datasets Synced & Cached on Disk");
     }
   }
 

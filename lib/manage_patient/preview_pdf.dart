@@ -69,13 +69,13 @@ class PreviewPdfComponent extends StatelessWidget {
     final Map<String, bool> toggles = Map<String, bool>.from(config['toggles'] ?? {});
     final double marginTop = (config['margin_top'] ?? 50.0).toDouble();
     final double marginBottom = (config['margin_bottom'] ?? 50.0).toDouble();
+    final double marginHorizontal = (config['margin_horizontal'] ?? config['margin_side'] ?? 35.0).toDouble();
 
     return Container(
       width: a4Width,
       constraints: const BoxConstraints(minHeight: a4Height),
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: Colors.white,
-        
       ),
       child: Column(
         children: [
@@ -83,15 +83,17 @@ class PreviewPdfComponent extends StatelessWidget {
 
           // CONTENT
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 45),
+            padding: EdgeInsets.symmetric(horizontal: marginHorizontal),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildHeader(),
-                const Divider(thickness: 1.5, height: 25, color: Colors.black12),
+                if (toggles["Header"] != false) ...[
+                  _buildHeader(),
+                  const Divider(thickness: 1.5, height: 25, color: Colors.black12),
+                ],
 
                 // 1. VITALS BAR (Prominent Top Level)
-                if (vitalsText.isNotEmpty)
+                if ((toggles["Vitals"] ?? true) && vitalsText.isNotEmpty)
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -146,7 +148,7 @@ class PreviewPdfComponent extends StatelessWidget {
                   ),
 
                 // 4. MEDICINE TABLE
-                if (rxList.isNotEmpty) ...[
+                if ((toggles["Rx"] ?? toggles["Prescription"] ?? true) && rxList.isNotEmpty) ...[
                   Table(
                     border: TableBorder.all(color: Colors.grey[300]!, width: 0.5),
                     columnWidths: const {
@@ -210,7 +212,7 @@ class PreviewPdfComponent extends StatelessWidget {
                 const SizedBox(height: 20),
 
                 // Footer
-                if (followUpText.isNotEmpty || referDoctorText.isNotEmpty)
+                if ((toggles["Follow Up"] ?? true) && (followUpText.isNotEmpty || referDoctorText.isNotEmpty))
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(border: Border.all(color: Colors.black12), borderRadius: BorderRadius.circular(4)),

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import '../../main.dart';
 import '../services/server_data_service.dart';
+import '../services/offline_sync_service.dart';
 import 'doctor/doctor_create.dart';
 import 'preview_pdf.dart';
 import 'pdf_generator.dart';
@@ -84,8 +85,18 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
           return s.isNotEmpty && s != "0";
         }
 
-        if (item['timing'] is Map) {
-          final t = item['timing'] as Map;
+        dynamic timingObj = item['timing'] ?? item['timing_json'];
+        Map<String, dynamic> t = {};
+        if (timingObj is Map) {
+          t = Map<String, dynamic>.from(timingObj);
+        } else if (timingObj is String && timingObj.trim().isNotEmpty) {
+          try {
+            final dec = jsonDecode(timingObj);
+            if (dec is Map) t = Map<String, dynamic>.from(dec);
+          } catch (_) {}
+        }
+
+        if (t.isNotEmpty) {
           String d = item['dosage']?.toString().trim() ?? "1";
           if (d.isEmpty) d = "1";
           String m = getDose(t['bb'], t['ab'], d);
@@ -97,8 +108,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         }
 
         List<String> instParts = [];
-        if (item['timing'] is Map) {
-          final t = item['timing'] as Map;
+        if (t.isNotEmpty) {
           if (isActive(t['bb'])) instParts.add("Before Breakfast");
           if (isActive(t['ab'])) instParts.add("After Breakfast");
           if (isActive(t['bl'])) instParts.add("Before Lunch");
@@ -112,12 +122,15 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         String durationRaw = item['duration']?.toString() ?? '';
         String durationFull = durationRaw.toLowerCase().replaceAll('d', ' Days').replaceAll('w', ' Weeks').replaceAll('m', ' Months');
 
+        String medType = (item['type'] ?? item['medicine_type'] ?? '').toString();
+        String medName = (item['name'] ?? item['medicine_name'] ?? '').toString();
+
         return {
-          "type": item['type']?.toString().toUpperCase() == 'ALLOPATHY' ? "" : (item['type']?.toString() ?? '').toUpperCase(),
-          "name": item['name']?.toString() ?? '',
+          "type": medType.toUpperCase() == 'ALLOPATHY' ? "" : medType.toUpperCase(),
+          "name": medName,
           "unit": item['unit']?.toString() ?? '',
           "freq": freqFull,
-          "dur": durationFull.trim(),
+          "dur": (durationFull.isEmpty ? durationRaw : durationFull).trim(),
           "note": instParts.join(", ")
         };
       }).toList() : [];
@@ -182,7 +195,12 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         patient: widget.patient,
         opdId: widget.opdId,
         date: visitDate,
-        config: {'margin_top': _marginTop, 'margin_bottom': _marginBottom, 'toggles': _printSettings},
+        config: {
+          'margin_top': _marginTop,
+          'margin_bottom': _marginBottom,
+          'margin_horizontal': _marginHorizontal,
+          'toggles': _printSettings
+        },
         symptomsText: symText,
         diagnosisText: diagText,
         historyText: hText,
@@ -242,24 +260,30 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
 
   Map<String, dynamic>? _selectedReferDoctor;
 
-  // Margin State
+  // Margin & Padding State (Closed by default)
   bool _showMargins = false;
+  bool _showSections = false;
   double _marginTop = 50.0;
   double _marginBottom = 50.0;
+  double _marginHorizontal = 35.0;
 
   // Print Settings
-  Map<String, bool> _printSettings = {
+  final Map<String, bool> _printSettings = {
+    "Header": true,
+    "Vitals": true,
     "Symptoms": true,
-    "Medical History": true,
-    "Check-Ups": true,
     "Diagnosis": true,
+    "Rx": true,
+    "Instructions": true,
+    "Check-Ups": true,
+    "Medical History": true,
+    "Blood Results": true,
     "Investigation Results": true,
     "Procedures": true,
     "Fitness Plan": true,
     "Clinical Notes": true,
-    "Instructions": true,
+    "Follow Up": true,
     "Signature": true,
-    "Blood Results": true,
   };
 
   @override
@@ -320,44 +344,22 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
 
   // --- LOCAL & CLOUD STORAGE: LOAD ---
   Future<void> _loadSavedSettings() async {
-    // 1. Try Loading from Cloud (Supabase) FIRST
+    // 1. FIRST: Load instantly from Local Storage (0ms offline guarantee)
     try {
-      final cloudResponse = await supabase
-          .from('opd_datasets')
-          .select('datajson')
-          .eq('dataname', 'report_settings')
-          .maybeSingle();
-
-      if (cloudResponse != null && cloudResponse['datajson'] != null) {
-        final data = cloudResponse['datajson'] as Map<String, dynamic>;
-        setState(() {
-          _marginTop = (data['margin_top'] ?? 50.0).toDouble();
-          _marginBottom = (data['margin_bottom'] ?? 50.0).toDouble();
-          if (data['toggles'] != null) {
-            Map<String, dynamic> toggles = data['toggles'];
-            toggles.forEach((key, value) {
-              if (_printSettings.containsKey(key)) {
-                _printSettings[key] = value as bool;
-              }
-            });
-          }
-        });
-        // Sync to local for offline use
-        _saveSettingsToLocal();
-        return; 
+      final cachedHive = OfflineSyncService().getCachedMasterData('report_settings');
+      if (cachedHive is Map) {
+        _applySettingsMap(Map<String, dynamic>.from(cachedHive));
       }
-    } catch (e) {
-      debugPrint("Cloud Settings Fetch Error: $e");
-    }
 
-    // 2. Fallback to Local SharedPreferences if Cloud fails
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
+      final prefs = await SharedPreferences.getInstance();
       if (prefs.containsKey('report_margin_top')) {
-        _marginTop = prefs.getDouble('report_margin_top') ?? 50.0;
+        _marginTop = prefs.getDouble('report_margin_top') ?? _marginTop;
       }
       if (prefs.containsKey('report_margin_bottom')) {
-        _marginBottom = prefs.getDouble('report_margin_bottom') ?? 50.0;
+        _marginBottom = prefs.getDouble('report_margin_bottom') ?? _marginBottom;
+      }
+      if (prefs.containsKey('report_margin_horizontal')) {
+        _marginHorizontal = prefs.getDouble('report_margin_horizontal') ?? _marginHorizontal;
       }
       if (prefs.containsKey('report_toggles')) {
         String? jsonStr = prefs.getString('report_toggles');
@@ -370,98 +372,244 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
           });
         }
       }
-    });
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint("Local settings load error: $e");
+    }
+
+    // 2. Fetch from Cloud in background with a 2-second timeout (never blocks UI or offline)
+    try {
+      final cloudResponse = await supabase
+          .from('opd_datasets')
+          .select('datajson')
+          .eq('dataname', 'report_settings')
+          .maybeSingle()
+          .timeout(const Duration(seconds: 2));
+
+      if (cloudResponse != null && cloudResponse['datajson'] != null) {
+        final rawData = cloudResponse['datajson'];
+        final data = rawData is Map ? Map<String, dynamic>.from(rawData) : <String, dynamic>{};
+        if (mounted && data.isNotEmpty) {
+          setState(() {
+            _applySettingsMap(data);
+          });
+          // Cache to local disk for future offline sessions
+          _saveSettingsToLocal();
+        }
+      }
+    } catch (e) {
+      debugPrint("Cloud Settings Fetch fallback (offline/cached): $e");
+    }
+  }
+
+  void _applySettingsMap(Map<String, dynamic> data) {
+    if (data['margin_top'] != null) {
+      _marginTop = (data['margin_top'] as num).toDouble();
+    }
+    if (data['margin_bottom'] != null) {
+      _marginBottom = (data['margin_bottom'] as num).toDouble();
+    }
+    if (data['margin_horizontal'] != null) {
+      _marginHorizontal = (data['margin_horizontal'] as num).toDouble();
+    } else if (data['margin_side'] != null) {
+      _marginHorizontal = (data['margin_side'] as num).toDouble();
+    }
+    if (data['toggles'] != null && data['toggles'] is Map) {
+      Map<String, dynamic> toggles = Map<String, dynamic>.from(data['toggles']);
+      toggles.forEach((key, value) {
+        if (_printSettings.containsKey(key) && value is bool) {
+          _printSettings[key] = value;
+        }
+      });
+    }
   }
 
   // --- LOCAL STORAGE: SAVE ---
   Future<void> _saveSettingsToLocal() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('report_margin_top', _marginTop);
-    await prefs.setDouble('report_margin_bottom', _marginBottom);
-    await prefs.setString('report_toggles', jsonEncode(_printSettings));
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('report_margin_top', _marginTop);
+      await prefs.setDouble('report_margin_bottom', _marginBottom);
+      await prefs.setDouble('report_margin_horizontal', _marginHorizontal);
+      await prefs.setString('report_toggles', jsonEncode(_printSettings));
+
+      await OfflineSyncService().cacheMasterData('report_settings', {
+        'margin_top': _marginTop,
+        'margin_bottom': _marginBottom,
+        'margin_horizontal': _marginHorizontal,
+        'toggles': _printSettings,
+      });
+    } catch (e) {
+      debugPrint("Error saving settings to local: $e");
+    }
+  }
+  void refreshData() {
+    _fetchAndMergeData();
   }
 
   // --- 1. FETCH & MERGE ---
   Future<void> _fetchAndMergeData() async {
     setState(() => _isLoading = true);
     try {
-      // (Sync happens automatically across tabs)
+      // 1. Base merged data with fallback patient info
+      Map<String, dynamic> mergedData = {
+        'id': widget.opdId,
+        'uhid': widget.patient.id,
+        'patient_name': widget.patient.name,
+        'created_at': widget.patient.visitDate.toIso8601String(),
+      };
 
-      // 1. Fetch from Main Table (Using generic select to avoid crashes if columns like 'temp' are missing)
-      final mainResponse = await supabase
-          .from('opd_registration')
-          .select() 
-          .eq('id', widget.opdId)
-          .maybeSingle();
+      // 2. Load Local Disk Clinical Data FIRST (< 1ms offline guarantee)
+      final localRx = OfflineSyncService().getLocalClinicalData(widget.opdId, 'treatment_data');
+      if (localRx is List && localRx.isNotEmpty) {
+        mergedData['rx_list_json'] = localRx.map((item) {
+          if (item is Map) {
+            return {
+              'id': item['id']?.toString() ?? '',
+              'name': item['name'] ?? item['medicine_name'] ?? '',
+              'type': item['type'] ?? item['medicine_type'] ?? '',
+              'unit': item['unit'] ?? '',
+              'dosage': item['dosage'] ?? '',
+              'duration': item['duration'] ?? '',
+              'timing': item['timing'] ?? item['timing_json'] ?? {},
+              'note': item['note'] ?? '',
+            };
+          }
+          return <String, dynamic>{};
+        }).toList();
+      }
 
-      if (mainResponse != null) {
-        Map<String, dynamic> mergedData = Map<String, dynamic>.from(mainResponse);
+      final localSym = OfflineSyncService().getLocalClinicalData(widget.opdId, 'symptoms');
+      if (localSym is List && localSym.isNotEmpty) {
+        mergedData['symptoms_list_json'] = localSym;
+      }
 
-        // 2. Fetch Structured Tables in PARALLEL
+      final localDiag = OfflineSyncService().getLocalClinicalData(widget.opdId, 'diagnosis_data');
+      if (localDiag is List && localDiag.isNotEmpty) {
+        mergedData['diagnosis_list_json'] = localDiag;
+      }
+
+      final localReports = OfflineSyncService().getLocalClinicalData(widget.opdId, 'instructions_data');
+      if (localReports is Map) {
+        if (localReports['instructions'] is List) {
+          mergedData['instructions_list_json'] = localReports['instructions'];
+        }
+        if (localReports['investigations'] is List) {
+          mergedData['investigations_list_json'] = localReports['investigations'];
+        }
+        if (localReports['procedures'] is List) {
+          mergedData['procedures_list_json'] = localReports['procedures'];
+        }
+      }
+
+      // 3. Attempt Cloud Fetch (if online) with short timeout
+      try {
+        final mainResponse = await supabase
+            .from('opd_registration')
+            .select()
+            .eq('id', widget.opdId)
+            .maybeSingle()
+            .timeout(const Duration(seconds: 3));
+
+        if (mainResponse != null) {
+          mergedData.addAll(Map<String, dynamic>.from(mainResponse));
+        }
+
         final List<Future<dynamic>> futures = [
-          supabase.from('opd_reg_symptoms').select().eq('opd_id', widget.opdId),
-          supabase.from('opd_reg_diagnosis').select().eq('opd_id', widget.opdId),
-          supabase.from('opd_reg_rx').select().eq('opd_id', widget.opdId),
-          supabase.from('opd_reg_reports').select().eq('opd_id', widget.opdId),
-          supabase.from('opd_datasets').select('datajson').eq('dataname', 'investigations').maybeSingle(),
+          supabase.from('opd_reg_symptoms').select().eq('opd_id', widget.opdId).timeout(const Duration(seconds: 3)),
+          supabase.from('opd_reg_diagnosis').select().eq('opd_id', widget.opdId).timeout(const Duration(seconds: 3)),
+          supabase.from('opd_reg_rx').select().eq('opd_id', widget.opdId).timeout(const Duration(seconds: 3)),
+          supabase.from('opd_reg_reports').select().eq('opd_id', widget.opdId).timeout(const Duration(seconds: 3)),
+          supabase.from('opd_datasets').select('datajson').eq('dataname', 'investigations').maybeSingle().timeout(const Duration(seconds: 3)),
         ];
         final results = await Future.wait(futures);
 
-        // --- Symptoms ---
+        // Symptoms (cloud overrides only if local was empty)
         final List symRows = results[0] as List;
-        mergedData['symptoms_list_json'] = symRows.map((r) => {
-          'name': r['name'],
-          'note': r['note'],
-          'duration': r['duration'],
-          'severity': r['severity'],
-          'custom_groups': r['custom_groups'],
-          'selected_options': r['selected_options'],
-        }).toList();
+        if (mergedData['symptoms_list_json'] == null || (mergedData['symptoms_list_json'] as List).isEmpty) {
+          mergedData['symptoms_list_json'] = symRows.map((r) => {
+            'name': r['name'],
+            'note': r['note'],
+            'duration': r['duration'],
+            'severity': r['severity'],
+            'custom_groups': r['custom_groups'],
+            'selected_options': r['selected_options'],
+          }).toList();
+        }
 
-        // --- Diagnosis ---
+        // Diagnosis (cloud overrides only if local was empty)
         final List diagRows = results[1] as List;
-        mergedData['diagnosis_list_json'] = diagRows.map((r) => {
-           'name': r['name'],
-           'note': r['note'],
-        }).toList();
+        if (mergedData['diagnosis_list_json'] == null || (mergedData['diagnosis_list_json'] as List).isEmpty) {
+          mergedData['diagnosis_list_json'] = diagRows.map((r) => {
+            'name': r['name'],
+            'note': r['note'],
+          }).toList();
+        }
 
-        // --- Rx ---
+        // Rx (cloud overrides only if local was empty and no pending offline edits)
         final List rxRows = results[2] as List;
-        mergedData['rx_list_json'] = rxRows.map((r) => {
-          'id': r['id'].toString(),
-          'name': r['medicine_name'],
-          'type': r['medicine_type'],
-          'unit': r['unit'],
-          'dosage': r['dosage'],
-          'duration': r['duration'],
-          'timing': r['timing_json'],
-          'note': r['note'],
-        }).toList();
+        final bool hasPendingRx = OfflineSyncService().hasPendingSync(widget.opdId, 'treatment_data');
+        if (!hasPendingRx && (mergedData['rx_list_json'] == null || (mergedData['rx_list_json'] as List).isEmpty)) {
+          mergedData['rx_list_json'] = rxRows.map((r) => {
+            'id': r['id'].toString(),
+            'name': r['medicine_name'],
+            'type': r['medicine_type'],
+            'unit': r['unit'],
+            'dosage': r['dosage'],
+            'duration': r['duration'],
+            'timing': r['timing_json'],
+            'note': r['note'],
+          }).toList();
+          if (rxRows.isNotEmpty) {
+            OfflineSyncService().cacheServerData(widget.opdId, 'treatment_data', mergedData['rx_list_json']);
+          }
+        }
 
-        // --- Reports ---
+        // Reports
         final List reportRows = results[3] as List;
-        mergedData['instructions_list_json'] = reportRows.where((r) => r['report_type'] == 'instruction').map((r) => r['item_name']).toList();
-        mergedData['investigations_list_json'] = reportRows.where((r) => r['report_type'] == 'investigation').map((r) => r['item_name']).toList();
-        mergedData['procedures_list_json'] = reportRows.where((r) => r['report_type'] == 'procedure').map((r) => r['item_name']).toList();
+        if (mergedData['instructions_list_json'] == null) {
+          mergedData['instructions_list_json'] = reportRows.where((r) => r['report_type'] == 'instruction').map((r) => r['item_name']).toList();
+        }
+        if (mergedData['investigations_list_json'] == null) {
+          mergedData['investigations_list_json'] = reportRows.where((r) => r['report_type'] == 'investigation').map((r) => r['item_name']).toList();
+        }
+        if (mergedData['procedures_list_json'] == null) {
+          mergedData['procedures_list_json'] = reportRows.where((r) => r['report_type'] == 'procedure').map((r) => r['item_name']).toList();
+        }
 
-        // --- Master Investigations ---
+        // Master investigations
         final masterRes = results[4] as Map?;
-        _investigationsMaster = (masterRes != null && masterRes['datajson'] is List) ? masterRes['datajson'] : [];
+        if (masterRes != null && masterRes['datajson'] is List) {
+          _investigationsMaster = masterRes['datajson'];
+        }
+      } catch (cloudErr) {
+        debugPrint("Cloud fetch fallback in preview: $cloudErr");
+      }
 
-        // 3. MERGE LOCAL EDITS (REMOVED - FETCHING ONLINE ONLY)
-        // Relies on cloud data fetched above in results
+      // Clinical Data
+      final clinicalMap = (mergedData['clinical_data'] != null)
+          ? Map<String, dynamic>.from(mergedData['clinical_data'])
+          : {};
+      mergedData['clinical_data'] = clinicalMap;
 
+      // Apply visit-specific margins & print settings if present
+      if (clinicalMap['margins'] != null && clinicalMap['margins'] is Map) {
+        final m = clinicalMap['margins'];
+        if (m['top'] != null) _marginTop = (m['top'] as num).toDouble();
+        if (m['bottom'] != null) _marginBottom = (m['bottom'] as num).toDouble();
+        if (m['horizontal'] != null) _marginHorizontal = (m['horizontal'] as num).toDouble();
+      }
+      if (clinicalMap['print_settings'] != null && clinicalMap['print_settings'] is Map) {
+        final ps = clinicalMap['print_settings'] as Map;
+        ps.forEach((k, v) {
+          if (_printSettings.containsKey(k) && v is bool) {
+            _printSettings[k] = v;
+          }
+        });
+      }
 
-        // Clinical Data
-        // Clinical Data (Using cloud states only)
-        final clinicalMap = (mergedData['clinical_data'] != null)
-            ? Map<String, dynamic>.from(mergedData['clinical_data'])
-            : {};
-        
-        mergedData['clinical_data'] = clinicalMap;
-
-        // Apply to UI State
-        _cloudData = mergedData;
+      // Apply to UI State
+      _cloudData = mergedData;
 
         // Meta (Follow Up, Notes, Refer)
         _selectedFollowUp = mergedData['follow_up_duration'] ?? "";
@@ -485,7 +633,6 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         if (mergedData['referring_doctor_name'] != null) {
           _selectedReferDoctor = {'name': mergedData['referring_doctor_name']};
         }
-      }
     } catch (e) {
       debugPrint("Fetch Error: $e");
     } finally {
@@ -552,8 +699,18 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
             return a;
           }
 
-          if (item['timing'] is Map) {
-            final t = item['timing'] as Map;
+          dynamic timingObj = item['timing'] ?? item['timing_json'];
+          Map<String, dynamic> t = {};
+          if (timingObj is Map) {
+            t = Map<String, dynamic>.from(timingObj);
+          } else if (timingObj is String && timingObj.trim().isNotEmpty) {
+            try {
+              final dec = jsonDecode(timingObj);
+              if (dec is Map) t = Map<String, dynamic>.from(dec);
+            } catch (_) {}
+          }
+
+          if (t.isNotEmpty) {
             if (isActive(t['bb']) || isActive(t['ab'])) { times.add("Morning"); }
             if (isActive(t['bl']) || isActive(t['al'])) { times.add("Afternoon"); }
             if (isActive(t['bd']) || isActive(t['ad'])) { times.add("Night"); }
@@ -567,8 +724,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
             }
           }
 
-          if (item['timing'] is Map) {
-            final t = item['timing'] as Map;
+          if (t.isNotEmpty) {
             String d = item['dosage']?.toString().trim() ?? "1";
             if (d.isEmpty) d = "1";
             String m = getDose(t['bb'], t['ab'], d);
@@ -581,8 +737,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
 
           // 2. Automated Instructions from Selection
           List<String> instParts = [];
-          if (item['timing'] is Map) {
-            final t = item['timing'] as Map;
+          if (t.isNotEmpty) {
             if (isActive(t['bb'])) instParts.add("Before Breakfast");
             if (isActive(t['ab'])) instParts.add("After Breakfast");
             if (isActive(t['bl'])) instParts.add("Before Lunch");
@@ -594,9 +749,10 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
           // Append manual note if exists
           String manualNote = item['note']?.toString() ?? '';
           // 3. Medicine Data Extraction
-          String type = item['type']?.toString().toLowerCase() == 'allopathy' ? "" : (item['type']?.toString() ?? '');
-          String name = item['name']?.toString() ?? '';
-          String unit = item['unit']?.toString() ?? '';
+          String medType = (item['type'] ?? item['medicine_type'] ?? '').toString();
+          String type = medType.toLowerCase() == 'allopathy' ? "" : medType;
+          String name = (item['name'] ?? item['medicine_name'] ?? '').toString();
+          String unit = (item['unit'] ?? '').toString();
           
           String durationRaw = item['duration']?.toString() ?? '';
           String durationFull = durationRaw.toLowerCase()
@@ -727,6 +883,7 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
     Map<String, dynamic> config = {
       'margin_top': _marginTop,
       'margin_bottom': _marginBottom,
+      'margin_horizontal': _marginHorizontal,
       'toggles': _printSettings
     };
 
@@ -778,15 +935,29 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
     final finalFollowUpNote = _followUpNoteController.text;
 
     try {
+      // 1. Save notes locally and in background
       await ServerDataService.saveData(opdId, 'clinical_notes', finalClinicalNote);
       await ServerDataService.saveData(opdId, 'private_note', _privateNoteController.text);
 
       final visitDate = _cloudData['created_at'] != null ? DateTime.parse(_cloudData['created_at']).toLocal() : widget.patient.visitDate;
       DateTime? nextReviewDate = _calculateNextReview(visitDate);
 
-      Map<String, dynamic> existingClinicalData = (_cloudData['clinical_data'] as Map<String, dynamic>?) ?? {};
+      // 2. Safe extraction of clinical_data (prevents _Map<dynamic, dynamic> cast error)
+      Map<String, dynamic> existingClinicalData = {};
+      if (_cloudData['clinical_data'] is Map) {
+        try {
+          existingClinicalData = Map<String, dynamic>.from(_cloudData['clinical_data'] as Map);
+        } catch (_) {
+          existingClinicalData = {};
+        }
+      }
       existingClinicalData['print_settings'] = _printSettings;
-      existingClinicalData['margins'] = {'top': _marginTop, 'bottom': _marginBottom};
+      existingClinicalData['margins'] = {
+        'top': _marginTop,
+        'bottom': _marginBottom,
+        'horizontal': _marginHorizontal
+      };
+      await _saveSettingsToLocal();
       existingClinicalData['refer_doctor'] = _selectedReferDoctor;
       existingClinicalData['meta_followup'] = {'duration': _selectedFollowUp, 'note': finalFollowUpNote};
       existingClinicalData['clinical_notes'] = finalClinicalNote;
@@ -804,19 +975,46 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         'clinical_data': existingClinicalData
       };
 
-      await supabase.from('opd_registration').update(updateData).eq('id', opdId);
+      // 3. Immediately save to disk cache & offline sync queue (zero data loss offline)
+      _cloudData.addAll(updateData);
+      await OfflineSyncService().saveClinicalData(opdId, 'opd_registration_update', updateData);
+      OfflineSyncService().updateCachedPatientStatus(opdId, isFinalized: true, visitStatus: 'Finalized');
+
+      // 4. Opportunistically update Supabase (silent fallback if offline)
+      bool isOnlineSuccess = false;
+      try {
+        await supabase
+            .from('opd_registration')
+            .update(updateData)
+            .eq('id', opdId)
+            .timeout(const Duration(seconds: 4));
+        isOnlineSuccess = true;
+      } catch (netErr) {
+        debugPrint("Offline mode: patient finalization queued for sync ($netErr)");
+      }
       
       // Notify listeners (Dashboard List) to refresh
       ServerDataService.refreshNotifier.value++;
       
       await _fetchAndMergeData();
 
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Saved & Finalized! Prepare to Share..."), backgroundColor: Colors.green));
+      if (mounted) {
+        if (isOnlineSuccess) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Saved & Finalized! Prepare to Share..."), backgroundColor: Colors.green),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Saved & Finalized Locally (Offline)! Auto-syncing when online."), backgroundColor: Colors.blue),
+          );
+        }
+      }
 
       // Automatically trigger share after finalize
       await _shareReport();
 
     } catch (e) {
+      debugPrint("Finalize Error: $e");
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -872,9 +1070,22 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
       final visitDate = _cloudData['created_at'] != null ? DateTime.parse(_cloudData['created_at']).toLocal() : widget.patient.visitDate;
       DateTime? nextReviewDate = _calculateNextReview(visitDate);
 
-      Map<String, dynamic> existingClinicalData = (_cloudData['clinical_data'] as Map<String, dynamic>?) ?? {};
+      // Safe extraction of clinical_data (prevents _Map<dynamic, dynamic> cast error)
+      Map<String, dynamic> existingClinicalData = {};
+      if (_cloudData['clinical_data'] is Map) {
+        try {
+          existingClinicalData = Map<String, dynamic>.from(_cloudData['clinical_data'] as Map);
+        } catch (_) {
+          existingClinicalData = {};
+        }
+      }
       existingClinicalData['print_settings'] = _printSettings;
-      existingClinicalData['margins'] = {'top': _marginTop, 'bottom': _marginBottom};
+      existingClinicalData['margins'] = {
+        'top': _marginTop,
+        'bottom': _marginBottom,
+        'horizontal': _marginHorizontal
+      };
+      await _saveSettingsToLocal();
       existingClinicalData['refer_doctor'] = _selectedReferDoctor;
       existingClinicalData['meta_followup'] = {'duration': _selectedFollowUp, 'note': finalFollowUpNote};
       existingClinicalData['clinical_notes'] = finalClinicalNote;
@@ -891,7 +1102,23 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
         'clinical_data': existingClinicalData
       };
 
-      await supabase.from('opd_registration').update(updateData).eq('id', opdId);
+      // Immediately save to disk cache & offline sync queue
+      _cloudData.addAll(updateData);
+      await OfflineSyncService().saveClinicalData(opdId, 'opd_registration_update', updateData);
+      OfflineSyncService().updateCachedPatientStatus(opdId, isFinalized: false, visitStatus: 'Checked Out');
+
+      // Opportunistically update Supabase
+      bool isOnlineSuccess = false;
+      try {
+        await supabase
+            .from('opd_registration')
+            .update(updateData)
+            .eq('id', opdId)
+            .timeout(const Duration(seconds: 4));
+        isOnlineSuccess = true;
+      } catch (netErr) {
+        debugPrint("Offline mode: patient checkout queued for sync ($netErr)");
+      }
       
       // Notify listeners (Dashboard List) to refresh
       ServerDataService.refreshNotifier.value++;
@@ -899,10 +1126,19 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
       await _fetchAndMergeData();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Patient Checked Out Successfully!"), backgroundColor: Colors.blue));
+        if (isOnlineSuccess) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Patient Checked Out Successfully!"), backgroundColor: Colors.blue),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Patient Checked Out Locally (Offline)! Auto-syncs when online."), backgroundColor: Colors.blue),
+          );
+        }
       }
 
     } catch (e) {
+      debugPrint("Checkout Error: $e");
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
     } finally {
       if (mounted) setState(() => _isCheckingOut = false);
@@ -910,17 +1146,35 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
   }
 
   Future<void> _saveGlobalConfig() async {
-    // 1. Save to Supabase (Cloud)
-    await supabase.from('opd_datasets').upsert({
-      'dataname': 'report_settings',
-      'datajson': {'margin_top': _marginTop, 'margin_bottom': _marginBottom, 'toggles': _printSettings},
-      'updated_at': DateTime.now().toIso8601String(),
-    }, onConflict: 'dataname');
-
-    // 2. Save to SharedPreferences (Local)
+    // 1. Save to Local Storage FIRST (instant 0ms persistence)
     await _saveSettingsToLocal();
 
-    if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Default Settings Saved!"), ));
+    // 2. Save to Supabase (Cloud) with a short timeout so offline never hangs
+    try {
+      await supabase.from('opd_datasets').upsert({
+        'dataname': 'report_settings',
+        'datajson': {
+          'margin_top': _marginTop,
+          'margin_bottom': _marginBottom,
+          'margin_horizontal': _marginHorizontal,
+          'toggles': _printSettings
+        },
+        'updated_at': DateTime.now().toIso8601String(),
+      }, onConflict: 'dataname').timeout(const Duration(seconds: 4));
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Default Settings Saved (Cloud & Local)!"), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      debugPrint("Cloud save failed (saved locally): $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Settings Saved Locally on Device (Offline)"), backgroundColor: Colors.blue),
+        );
+      }
+    }
   }
 
   @override
@@ -1013,34 +1267,157 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
                       ),
                       const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Divider(height: 1, color: PreviewTheme.border)),
 
-                      // MARGINS
+                      // MARGINS & PADDING
                       InkWell(
                         onTap: () => setState(() => _showMargins = !_showMargins),
                         borderRadius: BorderRadius.circular(8),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(vertical: 8.0),
-                          child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [_buildSidebarSectionTitle("PAGE MARGINS"), Icon(_showMargins ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, size: 18, color: Colors.grey)]),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              _buildSidebarSectionTitle("PAGE MARGINS & PADDING"),
+                              Icon(_showMargins ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, size: 18, color: Colors.grey),
+                            ],
+                          ),
                         ),
                       ),
                       if (_showMargins) ...[
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 8),
                         _buildSliderControl(
-                            "Top",
-                            _marginTop,
-                                (v) => setState(() => _marginTop = v),
-                                (v) => _saveSettingsToLocal() // Save on drag end
-                        ),
-                        const SizedBox(height: 16),
-                        _buildSliderControl(
-                            "Bottom",
-                            _marginBottom,
-                                (v) => setState(() => _marginBottom = v),
-                                (v) => _saveSettingsToLocal() // Save on drag end
+                          "Top Margin (Header)",
+                          _marginTop,
+                          200.0,
+                          (v) => setState(() => _marginTop = v),
+                          () => _saveSettingsToLocal(),
                         ),
                         const SizedBox(height: 12),
-                        SizedBox(width: double.infinity, child: TextButton.icon(onPressed: _saveGlobalConfig, icon: const Icon(Icons.save_outlined, size: 16), label: const Text("Save Default"))),
+                        _buildSliderControl(
+                          "Bottom Margin (Footer)",
+                          _marginBottom,
+                          200.0,
+                          (v) => setState(() => _marginBottom = v),
+                          () => _saveSettingsToLocal(),
+                        ),
+                        const SizedBox(height: 12),
+                        _buildSliderControl(
+                          "Side Padding (Left / Right)",
+                          _marginHorizontal,
+                          80.0,
+                          (v) => setState(() => _marginHorizontal = v),
+                          () => _saveSettingsToLocal(),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: _saveGlobalConfig,
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                  side: BorderSide(color: PreviewTheme.primary.withValues(alpha: 0.4)),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                ),
+                                icon: const Icon(Icons.save_outlined, size: 14),
+                                label: const Text("Save Default", style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            InkWell(
+                              onTap: _resetDefaultMargins,
+                              borderRadius: BorderRadius.circular(6),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey[100],
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: PreviewTheme.border),
+                                ),
+                                child: const Text("Reset", style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: PreviewTheme.textSub)),
+                              ),
+                            ),
+                          ],
+                        ),
                       ],
-                      const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Divider(height: 1, color: PreviewTheme.border)),
+                      const Padding(padding: EdgeInsets.symmetric(vertical: 14), child: Divider(height: 1, color: PreviewTheme.border)),
+
+                      // PRINT SECTIONS TOGGLE
+                      InkWell(
+                        onTap: () => setState(() => _showSections = !_showSections),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              _buildSidebarSectionTitle("PRINT SECTIONS"),
+                              Row(
+                                children: [
+                                  Text(
+                                    "${_printSettings.values.where((v) => v).length}/${_printSettings.length} ON",
+                                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: PreviewTheme.primary),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Icon(_showSections ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, size: 18, color: Colors.grey),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (_showSections) ...[
+                        const SizedBox(height: 6),
+                        ..._printSettings.keys.map((key) {
+                          final isChecked = _printSettings[key] ?? true;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2.0),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(6),
+                              onTap: () {
+                                setState(() {
+                                  _printSettings[key] = !isChecked;
+                                });
+                                _saveSettingsToLocal();
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: Checkbox(
+                                        value: isChecked,
+                                        activeColor: PreviewTheme.primary,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                        onChanged: (val) {
+                                          setState(() {
+                                            _printSettings[key] = val ?? true;
+                                          });
+                                          _saveSettingsToLocal();
+                                        },
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        _getSectionFriendlyLabel(key),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: isChecked ? FontWeight.w600 : FontWeight.normal,
+                                          color: isChecked ? PreviewTheme.textMain : PreviewTheme.textSub,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
+                      const Padding(padding: EdgeInsets.symmetric(vertical: 14), child: Divider(height: 1, color: PreviewTheme.border)),
 
                       // FOLLOW UP
                       Row(
@@ -1341,35 +1718,86 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
     );
   }
 
-  // --- UPDATED SLIDER CONTROL: Auto-save on drag end ---
-  Widget _buildSliderControl(String label, double val, Function(double) onChanged, Function(double) onChangeEnd) {
-    return Row(
+  // --- UPDATED SLIDER CONTROL: Auto-save on drag end with live point badge ---
+  Widget _buildSliderControl(String label, double val, double maxVal, Function(double) onChanged, VoidCallback onChangeEnd) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(width: 50, child: Text(label, style: const TextStyle(fontSize: 12, color: PreviewTheme.textMain))),
-        Expanded(
-          child: SizedBox(
-            height: 20,
-            child: SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                activeTrackColor: PreviewTheme.primary,
-                inactiveTrackColor: Colors.grey[200],
-                thumbColor: PreviewTheme.primary,
-                trackHeight: 2,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                overlayShape: SliderComponentShape.noOverlay,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: PreviewTheme.textMain)),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: PreviewTheme.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(4),
               ),
-              child: Slider(
-                value: val,
-                min: 0,
-                max: 200,
-                onChanged: onChanged,
-                onChangeEnd: onChangeEnd, // Saves when user releases handle
+              child: Text(
+                "${val.toInt()} pt",
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: PreviewTheme.primary),
               ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        SizedBox(
+          height: 24,
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: PreviewTheme.primary,
+              inactiveTrackColor: Colors.grey[200],
+              thumbColor: PreviewTheme.primary,
+              trackHeight: 2.5,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              overlayShape: SliderComponentShape.noOverlay,
+            ),
+            child: Slider(
+              value: val.clamp(0.0, maxVal),
+              min: 0,
+              max: maxVal,
+              onChanged: onChanged,
+              onChangeEnd: (_) => onChangeEnd(), // Saves when user releases handle
             ),
           ),
         ),
       ],
     );
+  }
+
+  void _resetDefaultMargins() {
+    setState(() {
+      _marginTop = 50.0;
+      _marginBottom = 50.0;
+      _marginHorizontal = 35.0;
+    });
+    _saveSettingsToLocal();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Margins reset to default (Top 50, Bottom 50, Side 35 pt)"), duration: Duration(seconds: 1)),
+      );
+    }
+  }
+
+  String _getSectionFriendlyLabel(String key) {
+    switch (key) {
+      case "Header": return "Patient Header & Barcode";
+      case "Vitals": return "Vitals Banner";
+      case "Symptoms": return "Symptoms";
+      case "Diagnosis": return "Diagnosis";
+      case "Rx": return "Medicines (Rx Table)";
+      case "Instructions": return "Instructions & Advice";
+      case "Check-Ups": return "Check-Ups & Observations";
+      case "Medical History": return "Medical History";
+      case "Blood Results": return "Blood Test Results";
+      case "Investigation Results": return "Investigations";
+      case "Procedures": return "Procedures";
+      case "Fitness Plan": return "Fitness & Diet Plans";
+      case "Clinical Notes": return "Remarks / Clinical Notes";
+      case "Follow Up": return "Follow-Up Footer";
+      case "Signature": return "Doctor Signature";
+      default: return key;
+    }
   }
 
   void _openDoctorSelector() async {
@@ -1396,13 +1824,13 @@ class PreviewTabState extends State<PreviewTab> with AutomaticKeepAliveClientMix
                       mainAxisSize: MainAxisSize.min,
                       children: _printSettings.keys.map((key) {
                         return CheckboxListTile(
-                          title: Text(key, style: const TextStyle(fontSize: 13)),
-                          value: _printSettings[key]!,
-                          activeColor: Colors.blue,
+                          title: Text(_getSectionFriendlyLabel(key), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                          value: _printSettings[key] ?? true,
+                          activeColor: PreviewTheme.primary,
                           controlAffinity: ListTileControlAffinity.leading,
                           onChanged: (val) {
-                            setStateDialog(() => _printSettings[key] = val!);
-                            setState(() => _printSettings[key] = val!);
+                            setStateDialog(() => _printSettings[key] = val ?? true);
+                            setState(() => _printSettings[key] = val ?? true);
                             _saveSettingsToLocal(); // Auto-save on toggle
                           },
                         );

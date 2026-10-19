@@ -13,6 +13,7 @@ import 'package:infiplus_opd/services/master_data_service.dart';
 import 'package:infiplus_opd/services/server_data_service.dart' as sds;
 import 'package:infiplus_opd/registration_form.dart';
 import 'package:infiplus_opd/payment_panel.dart';
+import 'package:infiplus_opd/services/offline_sync_service.dart';
 
 // ─────────────────────────────────────────────────────────────────
 //  GLOBAL DESIGN SYSTEM
@@ -173,6 +174,7 @@ class Patient {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SupabaseHandler.initialize();
+  await OfflineSyncService().initialize();
   
   // Start loading master data in background, don't block the UI thread
   MasterDataService().initialize(); 
@@ -588,6 +590,16 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
   }
 
   Future<void> _smartLoadData() async {
+    // 1. Immediately load cached patient queue from local disk (0ms lag on startup)
+    final cached = OfflineSyncService().getCachedPatientQueue();
+    if (cached.isNotEmpty && mounted) {
+      setState(() {
+        patients = cached.map((json) => Patient.fromOpdMap(json)).toList();
+        _isLoading = false;
+      });
+    }
+
+    // 2. Sync with cloud in background
     await _syncWithCloud();
     if (mounted) {
       setState(() => _isLoading = false);
@@ -607,34 +619,75 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
 
       dynamic request;
       if (searchQuery != null && searchQuery.trim().isNotEmpty) {
-        final q = searchQuery.trim();
-        
-        // Step 1: Find patients that match the search query in patient_detail
-        final numVal = int.tryParse(q);
-        String filterString = 'name.ilike.%$q%,uhid.ilike.%$q%,address.ilike.%$q%';
-        if (numVal != null) {
-          filterString += ',number.eq.$numVal';
-        }
-        
-        final patientSearch = await SupabaseHandler.client
-            .from('patient_detail')
-            .select('uhid')
-            .or(filterString)
-            .limit(100);
-        
+        final rawQ = searchQuery.trim();
+        final cleanId = rawQ
+            .replaceAll(RegExp(r'^(id|uhid)[:\s#]+', caseSensitive: false), '')
+            .replaceAll('#', '')
+            .trim();
+        final numVal = int.tryParse(cleanId.isNotEmpty ? cleanId : rawQ);
+
         final List<String> matchingUhids = [];
-        for (var p in patientSearch) {
-          final u = p['uhid']?.toString() ?? '';
-          if (u.isNotEmpty && !matchingUhids.contains(u)) {
-            matchingUhids.add(u);
+
+        // 1. If numeric, check if it matches an opd_registration id (OPD ID) directly
+        if (numVal != null) {
+          try {
+            final opdSearch = await SupabaseHandler.client
+                .from('opd_registration')
+                .select('uhid')
+                .eq('id', numVal)
+                .limit(10);
+            for (var o in opdSearch) {
+              final u = o['uhid']?.toString() ?? '';
+              if (u.isNotEmpty && !matchingUhids.contains(u)) {
+                matchingUhids.add(u);
+              }
+            }
+          } catch (e) {
+            debugPrint("Error checking opd_registration id: $e");
           }
         }
-        
-        // Step 2: Query opd_registration for these UHIDs OR direct UHID matches
+
+        // 2. Search patient_detail for matching name, uhid, address, or phone number
+        try {
+          String filterString = 'name.ilike.%$rawQ%,uhid.ilike.%$rawQ%,address.ilike.%$rawQ%';
+          if (cleanId.isNotEmpty && cleanId != rawQ) {
+            filterString += ',name.ilike.%$cleanId%,uhid.ilike.%$cleanId%,address.ilike.%$cleanId%';
+          }
+          if (numVal != null) {
+            filterString += ',number.eq.$numVal';
+          }
+
+          final patientSearch = await SupabaseHandler.client
+              .from('patient_detail')
+              .select('uhid')
+              .or(filterString)
+              .limit(100);
+
+          for (var p in patientSearch) {
+            final u = p['uhid']?.toString() ?? '';
+            if (u.isNotEmpty && !matchingUhids.contains(u)) {
+              matchingUhids.add(u);
+            }
+          }
+        } catch (e) {
+          debugPrint("Error searching patient_detail: $e");
+        }
+
+        // 3. Query opd_registration for matching UHIDs or direct OPD ID / UHID match
+        final searchToken = cleanId.isNotEmpty ? cleanId : rawQ;
         if (matchingUhids.isNotEmpty) {
-          request = base.inFilter('uhid', matchingUhids).order('created_at', ascending: false);
+          if (numVal != null) {
+            final uhidList = matchingUhids.map((u) => '"$u"').join(',');
+            request = base.or('uhid.in.($uhidList),id.eq.$numVal').order('created_at', ascending: false);
+          } else {
+            request = base.inFilter('uhid', matchingUhids).order('created_at', ascending: false);
+          }
         } else {
-          request = base.ilike('uhid', '%$q%').order('created_at', ascending: false);
+          if (numVal != null) {
+            request = base.or('uhid.ilike.%$searchToken%,id.eq.$numVal').order('created_at', ascending: false);
+          } else {
+            request = base.ilike('uhid', '%$searchToken%').order('created_at', ascending: false);
+          }
         }
       } else {
         request = base.order('created_at', ascending: false);
@@ -646,15 +699,30 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
       if (mounted) {
         setState(() {
           patients    = data.map((json) => Patient.fromOpdMap(json)).toList();
+          if (_selectedIndex >= patients.length) {
+            _selectedIndex = 0;
+          }
           _isOffline  = false;
           _isLoading  = false;
         });
+        // Cache to on-disk flash storage for offline instant startup
+        if (searchQuery == null || searchQuery.trim().isEmpty) {
+          OfflineSyncService().cachePatientQueue(data);
+        }
       }
     } catch (e) {
       final err = e.toString().toLowerCase();
-      if (err.contains('socketexception') || err.contains('timeout') || err.contains('host lookup')) {
+      if (err.contains('socketexception') || err.contains('timeout') || err.contains('host lookup') || err.contains('network') || err.contains('failed host lookup') || err.contains('handshakeexception')) {
         if (mounted) {
-          setState(() => _isOffline = true);
+          setState(() {
+            _isOffline = true;
+            _isLoading = false;
+            // Fallback to freshest cached data from disk (includes offline finalizations)
+            final cached = OfflineSyncService().getCachedPatientQueue();
+            if (cached.isNotEmpty) {
+              patients = cached.map((json) => Patient.fromOpdMap(json)).toList();
+            }
+          });
         }
       } else {
         debugPrint("Critical Error: $e");
@@ -695,7 +763,7 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
     final screenWidth = MediaQuery.of(context).size.width;
     final isTablet    = screenWidth > 800;
 
-    if (_isLoading) {
+    if (_isLoading && patients.isEmpty) {
       return Scaffold(
         body: Center(
           child: Column(
@@ -705,41 +773,6 @@ class _PatientDashboardPageState extends State<PatientDashboardPage> {
               const SizedBox(height: 20),
               Text("Loading patient queue…",
                 style: GoogleFonts.poppins(fontSize: 14, color: AppColors.textSecondary)),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (patients.isEmpty) {
-      return Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: AppColors.accentLight,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.cloud_off_rounded, size: 48, color: AppColors.primary),
-              ),
-              const SizedBox(height: 20),
-              Text("No Patients Found", style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-              const SizedBox(height: 8),
-              if (_isOffline)
-                Text("You are currently offline.", style: GoogleFonts.poppins(fontSize: 13, color: AppColors.warning)),
-              const SizedBox(height: 24),
-              ElevatedButton.icon(
-                onPressed: _syncWithCloud,
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text("Retry"),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
             ],
           ),
         ),
